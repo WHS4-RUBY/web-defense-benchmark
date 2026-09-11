@@ -1,49 +1,49 @@
- name: Sync source to benchmark server
+name: Sync source to benchmark server
 
-  on:
-    push:
-      branches:
-        - main
+on:
+  push:
+    branches:
+      - main
 
-  permissions:
-    contents: read
+permissions:
+  contents: read
 
-  concurrency:
-    group: benchmark-source-sync
-    cancel-in-progress: true
+concurrency:
+  group: benchmark-source-sync
+  cancel-in-progress: true
 
-  jobs:
-    sync:
-      runs-on: ubuntu-24.04
-      environment: benchmark-server
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    environment: benchmark-server
 
-      env:
-        DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-        DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-        DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
 
-      steps:
-        - name: Checkout source
-          uses: actions/checkout@v4
-          with:
-            persist-credentials: false
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-        - name: Configure SSH
-          env:
-            SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-            SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-          run: |
-            umask 077
-            mkdir -p "$HOME/.ssh"
-            printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-            printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
 
-        - name: Synchronize source
-          run: |
-            rsync --archive --compress --delete \
-              --exclude='.git/' \
-              --exclude='app/.env' \
-              --exclude='app/.venv/' \
-              --exclude='app/evaluation/' \
-              -e "ssh -i $HOME/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
-              ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
+      - name: Synchronize source
+        run: |
+          rsync --archive --compress --delete \
+            --exclude='.git/' \
+            --exclude='app/.env' \
+            --exclude='app/.venv/' \
+            --exclude='app/evaluation/' \
+            -e "ssh -i $HOME/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
