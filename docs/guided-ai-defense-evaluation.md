@@ -11,9 +11,9 @@
 | `hidden-black-box` | 대상의 공개 시작 주소와 일반 공격 지침 | 사전 정보가 없는 공격자의 탐색 성능 |
 | `guided` | 공개 시작 주소, 한 개의 명시적 보안 과업, 제한된 힌트 | 그 과업을 받은 공격자에 대한 해당 표적과 방어의 효과 |
 
-`guided`는 공격자 난이도 등급이 아니라 정보 제공 조건이다. 현재 코호트는 Codex CLI의 `gpt-5.6-sol`, 추론 강도 `medium`, 공격자 지침 v10을 사용한다. 한 시험의 상한은 1,800초, 능동 HTTP 요청 100건, 판단 40회, 모델 호출 45회다. 모델은 공개 웹 요청과 브라우저 동작만 지시할 수 있고 호스트 파일, Docker, 평가기, 통제망과 외부 인터넷에는 접근할 수 없다.
+`guided`는 공격자 난이도 등급이 아니라 정보 제공 조건이다. 현재 코호트는 Codex CLI에 `gpt-5.6-sol`을 요청하고 추론 강도 `medium`, 공격자 지침 v10을 사용한다. 당시 Codex JSONL 응답은 실제 모델 ID를 제공하지 않았으며 실행기가 요청값을 관측값으로 잘못 기록했다. 따라서 아래 실행 횟수는 보존하지만 모델 동일성이 검증된 효과 결과로 사용하지 않는다. 한 시험의 상한은 1,800초, 능동 HTTP 요청 100건, 판단 40회, 모델 호출 45회다. 모델은 공개 웹 요청과 브라우저 동작만 지시할 수 있고 호스트 파일, Docker, 평가기, 통제망과 외부 인터넷에는 접근할 수 없다.
 
-공개 브리프는 상품 검색의 `q` 입력과 확인할 보안 효과를 알려 주지만 취약점 분류, 공격 문자열, 정답 레코드, 소스와 비공개 성공 판정은 알려 주지 않는다. 따라서 현재 결과의 공격자 표기는 `guided Codex gpt-5.6-sol medium, profile v10`이다. 사람 집단과 서로 다른 프론티어 공격자 두 종류 이상의 반복 보정이 없으므로 `easy`, `medium`, `hard` 난이도는 부여하지 않는다. 이 코호트 밖의 모델이나 블라인드 공격자에게 결과를 일반화하지 않는다.
+공개 브리프는 상품 검색의 `q` 입력과 확인할 보안 효과를 알려 주지만 취약점 분류, 공격 문자열, 정답 레코드, 소스와 비공개 성공 판정은 알려 주지 않는다. 당시 요청 조건 표기는 `guided Codex gpt-5.6-sol medium, profile v10`이다. 실제 모델 ID는 관측되지 않았다. 사람 집단과 서로 다른 프론티어 공격자 두 종류 이상의 반복 보정이 없으므로 `easy`, `medium`, `hard` 난이도는 부여하지 않는다. 이 코호트 밖의 모델이나 블라인드 공격자에게 결과를 일반화하지 않는다.
 
 현재 공식 블라인드 자격 시험은 5회 중 0회 성공했다. 따라서 그 결과로 방어 효과를 비교하지 않는다. 근거는 [`../evidence/20260909/qualification-sqli-codex-v10-official.json`](../evidence/20260909/qualification-sqli-codex-v10-official.json)이다.
 
@@ -109,13 +109,13 @@ $runDir = "app\evaluation\$runId"
 
 분석기는 실행 계획과 봉인의 표적, 공급자, 프로필, 지식 조건, 공개 브리프 해시, 시드, 예산과 전체 일정을 대조한다. 각 조건의 공격 성공률에는 Wilson 95% 구간을 사용한다. `proxy-only`와 `static-guard`의 대응 차이는 Newcombe 방법 10 구간과 양측 정확 McNemar 검정으로 판정한다. 정상 트래픽 차단 또는 방어 오류가 한 건이라도 있으면 효과 주장을 허용하지 않는다.
 
-`positive_effect_claim_allowed`가 `true`여도 결론은 Codex, 지정 브리프, SQL 상품 검색 표적, 등록된 `static-guard`에 한정된다. 다른 취약점, 다른 모델, 블라인드 공격자 또는 전체 방어 제품의 효과로 확대해서는 안 된다.
+분석기는 통계 조건을 만족하면 `statistical_effect_gate_passed`만 `true`로 기록한다. 이 단계의 `positive_effect_claim_allowed`는 항상 `false`다. 독립 검토 기록과 입력 해시를 별도 검증한 결과가 통과해야 그 검증 결과에서 `positive_effect_claim_allowed`가 `true`가 된다. 허용된 결론도 지정 브리프, SQL 상품 검색 표적과 등록된 `static-guard`에 한정된다.
 
 ## 3. 실제 v3 실행 결과
 
 같은 과업 지정 공격자는 기준 모듈 v1과 v2를 실제로 우회했다. v1과 v2 발견 결과는 [`../evidence/20260909/static-guard-v1-guided-bypass-discovery.json`](../evidence/20260909/static-guard-v1-guided-bypass-discovery.json)과 [`../evidence/20260909/static-guard-v2-guided-bypass-discovery.json`](../evidence/20260909/static-guard-v2-guided-bypass-discovery.json)에 보존했다. 이 우회 결과를 보고 v3 규칙을 수정했으므로 v1과 v2는 탐색 및 조정 자료이고 v3만 수정 후 계획을 고정한 실행이다. v3 통계는 봉인 뒤 99회 일정에 대한 결과지만 새로운 표적을 쓴 독립 보류 시험은 아니다.
 
-KST 2026년 9월 9일에 `guided Codex gpt-5.6-sol medium, profile v10`으로 무방어 자격 시험 5회를 실행했고 5회 모두 비공개 목표를 달성했다. 실행, 격리, 금지 도구, 정상 트래픽과 계획 봉인 검사는 모두 통과했다. 자격 근거는 [`../evidence/20260909/qualification-sqli-codex-v10-guided-v3-official.json`](../evidence/20260909/qualification-sqli-codex-v10-guided-v3-official.json)이다.
+KST 2026년 9월 9일에 요청 모델을 Codex `gpt-5.6-sol`, 추론 강도를 `medium`, 프로필을 v10으로 설정해 무방어 자격 시험 5회를 실행했고 5회 모두 비공개 목표를 달성했다. 실행, 격리, 금지 도구, 정상 트래픽과 계획 봉인 검사는 모두 통과했다. 당시 CLI 출력에서 실제 모델 ID는 관측되지 않았으므로 모델 동일성이 검증된 자격 결과는 아니다. 실행 기록은 [`../evidence/20260909/qualification-sqli-codex-v10-guided-v3-official.json`](../evidence/20260909/qualification-sqli-codex-v10-guided-v3-official.json)에 있다.
 
 같은 입력과 한도로 세 조건을 각각 33회 실행한 결과는 다음과 같다.
 
@@ -129,7 +129,7 @@ KST 2026년 9월 9일에 `guided Codex gpt-5.6-sol medium, profile v10`으로 �
 
 한 시행은 외부 Codex 서비스의 콘텐츠 필터 때문에 `model-error`로 끝나 자동 배수됐다. 이 시행은 공격 결과로 계산하지 않고 원본을 `attempts/`에 보존한 뒤 동일 봉인 설정으로 한 번 재시도했다. 재시도는 `attack-failed`로 정상 종료했고 최종 99회에는 인프라와 모델 오류가 없다. 재시도 연결 근거는 [`../evidence/20260909/confirmatory-sqli-codex-v10-guided-v3-retry-audit.json`](../evidence/20260909/confirmatory-sqli-codex-v10-guided-v3-retry-audit.json)에 있다.
 
-통계 분석은 [`../evidence/20260909/confirmatory-sqli-codex-v10-guided-v3-analysis.json`](../evidence/20260909/confirmatory-sqli-codex-v10-guided-v3-analysis.json), 99회 실행 무결성은 [`../evidence/20260909/confirmatory-sqli-codex-v10-guided-v3-execution-integrity.json`](../evidence/20260909/confirmatory-sqli-codex-v10-guided-v3-execution-integrity.json)에 있다. 이 결과는 방어 모듈 장착 계약의 기준 실행이며 Honeyval이나 다른 실제 방어 제품의 효과를 평가한 결과가 아니다.
+통계 분석은 [`../evidence/20260909/confirmatory-sqli-codex-v10-guided-v3-analysis.json`](../evidence/20260909/confirmatory-sqli-codex-v10-guided-v3-analysis.json), 99회 실행 무결성은 [`../evidence/20260909/confirmatory-sqli-codex-v10-guided-v3-execution-integrity.json`](../evidence/20260909/confirmatory-sqli-codex-v10-guided-v3-execution-integrity.json)에 있다. 기존 분석 파일의 `positive_effect_claim_allowed: true`는 독립 검토 전에 생성된 과거 판정이므로 현재 기준에서는 효력이 없다. 이 결과는 방어 모듈 장착 계약의 기준 실행이며 Honeyval이나 다른 실제 방어 제품의 효과를 평가한 결과가 아니다.
 
 ## 4. 독립 검토
 

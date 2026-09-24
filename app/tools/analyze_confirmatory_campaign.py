@@ -10,6 +10,11 @@ from statistics import NormalDist
 
 from jsonschema import Draft202012Validator
 
+from main_experiment_scope_v1 import (
+    POLICY_PATH as MAIN_EXPERIMENT_POLICY_PATH,
+    main_experiment_target_gate,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PLAN_SCHEMA = PROJECT_ROOT / "contracts" / "confirmatory-analysis-plan.schema.json"
@@ -276,7 +281,16 @@ def summarize_condition_rows(
 
 
 def pair_invariants_match(control: dict[str, object], treatment: dict[str, object]) -> bool:
-    fields = ("target_id", "provider", "pair_id", "repetition", "observed_model_id")
+    fields = (
+        "target_id",
+        "provider",
+        "pair_id",
+        "repetition",
+        "requested_model_id",
+        "observed_model_id",
+        "model_identity_source",
+        "model_identity_verified",
+    )
     if any(control.get(field) != treatment.get(field) for field in fields):
         return False
     control_normal = control.get("normal_traffic")
@@ -290,6 +304,12 @@ def pair_invariants_match(control: dict[str, object], treatment: dict[str, objec
         if control_isolation.get("account_namespace_sha256") != treatment_isolation.get("account_namespace_sha256"):
             return False
     return True
+
+
+def defense_effect_target_gate(target_ids: list[str]) -> dict[str, object]:
+    gate = main_experiment_target_gate(target_ids)
+    gate["policy_sha256"] = digest(MAIN_EXPERIMENT_POLICY_PATH)
+    return gate
 
 
 def trial_keys(rows: list[object]) -> list[str]:
@@ -457,6 +477,7 @@ def analyze(run_dir: Path, plan: dict[str, object]) -> dict[str, object]:
     seal_targets = [str(item) for item in seal.get("targets", [])]
     seal_providers = [str(item) for item in seal.get("providers", [])]
     expected_targets = [str(item) for item in execution["target_ids"]]
+    defense_effect_scope = defense_effect_target_gate(expected_targets)
     expected_providers = [str(item) for item in execution["providers"]]
     sealed_inputs = seal.get("sealed_inputs", {})
     seal_limits = seal.get("limits", {})
@@ -535,6 +556,7 @@ def analyze(run_dir: Path, plan: dict[str, object]) -> dict[str, object]:
     }
     integrity_checks = {
         "run_targets_match_plan": seal_targets == expected_targets,
+        "targets_allowed_for_defense_effect": defense_effect_scope["passed"] is True,
         "run_providers_match_plan": seal_providers == expected_providers,
         "attacker_profile_digest_matches_plan": sealed_inputs.get(
             execution["attacker_profile_sealed_input"]
@@ -583,6 +605,8 @@ def analyze(run_dir: Path, plan: dict[str, object]) -> dict[str, object]:
         == int(summary.get("completed_trials", -2))
         and int(summary.get("unstarted_trials", -1)) == 0,
         "trial_files_match_summary": len(trials) == int(summary.get("completed_trials", -1)),
+        "model_identity_evidence_verified": bool(trials)
+        and all(item.get("model_identity_verified") is True for item in trials),
         "post_attachment_normal_probe_available": bool(eligible) and all(
             normal_probe(item) is not None for item in eligible
         ),
@@ -614,6 +638,7 @@ def analyze(run_dir: Path, plan: dict[str, object]) -> dict[str, object]:
             "required_pairs_per_target_provider": required_pairs,
         },
         "integrity_checks": integrity_checks,
+        "defense_effect_scope": defense_effect_scope,
         "trials_read": len(trials),
         "valid_trials": len(eligible),
         "excluded_trials": excluded,
@@ -626,8 +651,10 @@ def analyze(run_dir: Path, plan: dict[str, object]) -> dict[str, object]:
         "claim_status": {
             "analysis_complete": all(integrity_checks.values()),
             "eligible_comparisons": sum(item["positive_effect_claim_ready"] for item in comparison_rows),
-            "positive_effect_claim_allowed": all(integrity_checks.values())
+            "statistical_effect_gate_passed": all(integrity_checks.values())
             and any(item["positive_effect_claim_ready"] for item in comparison_rows),
+            "independent_review_completed": False,
+            "positive_effect_claim_allowed": False,
         },
     }
 

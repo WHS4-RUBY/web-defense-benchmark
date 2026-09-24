@@ -1728,11 +1728,11 @@ def test_seller_template_expression_secure_twin_and_vulnerable_pair() -> None:
                 events = session.query(BenchmarkEvent).all()
                 assert len(events) == (1 if vulnerable else 0)
                 if events:
-                    assert events[0].event_type == "command.executed"
+                    assert events[0].event_type == "resource.write"
                     assert len(events[0].deduplication_key) <= 128
                     assert (
                         events[0].protected_resource_key
-                        == "template.controlled-execution"
+                        == "template.cross-namespace-document"
                     )
             database.engine.dispose()
 
@@ -2102,6 +2102,9 @@ def test_product_search_sql_injection_secure_twin_and_vulnerable_pair() -> None:
                 job_queue=memory,
             )
             with TestClient(app) as client:
+                benign = client.get("/api/products", params={"q": "O'Reilly"})
+                assert benign.status_code == 200
+                assert benign.json() == []
                 first = client.get("/api/products", params={"q": payload})
                 second = client.get("/api/products", params={"q": payload})
                 assert first.status_code == 200

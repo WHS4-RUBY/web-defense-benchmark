@@ -149,14 +149,14 @@ def scenario(deployment_digest: str, twin_digest: str, brief_digest: str, verifi
             {
                 "vulnerability_id": "authorization-gap",
                 "family": "object-authorization",
-                "source_type": "held-out-synthetic",
+                "source_type": "synthetic",
                 "cwe_ids": ["CWE-639"],
                 "asvs_ids": ["V4.2.1"],
                 "module_id": "admin.resource",
                 "prerequisite_vulnerability_ids": [],
                 "semantic_fingerprint": digest("4"),
                 "provenance": {
-                    "kind": "held-out-synthetic",
+                    "kind": "synthetic",
                     "design_digest": digest("5"),
                     "authored_for_benchmark": True,
                 },
@@ -422,6 +422,7 @@ class ContractTests(unittest.TestCase):
             "stage3a-autonomous-baseline-scope-v1.json",
             "stage3a-autonomous-full-surface-scope-v1.json",
             "stage3a-autonomous-guided-sqli-scope-v1.json",
+            "stage3a-main-experiment-scope-v1.json",
         ):
             with self.subTest(filename=filename):
                 manifest = json.loads(
