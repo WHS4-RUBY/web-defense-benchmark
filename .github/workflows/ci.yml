@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
 
 jobs:
@@ -43,8 +43,34 @@ jobs:
           bash -n scripts/benchmark.sh
           bash -n scripts/defense.sh
 
+  frontend-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: app/frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: app/frontend
+        run: npm run build
+
+      - name: Audit frontend dependencies
+        working-directory: app/frontend
+        run: npm audit --audit-level=moderate
+
   runtime-images:
-    needs: contracts-and-tests
+    # 브랜치 push마다 이미지를 빌드해 Dockerfile을 검증하고, main 에서만 GHCR 에 푸시한다.
+    # PR 이벤트는 같은 브랜치의 push 와 중복이므로 건너뛴다.
+    if: github.event_name == 'push'
+    needs: [contracts-and-tests, frontend-check]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -70,27 +96,24 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Set image coordinates
-        shell: bash
-        run: |
-          echo "IMAGE_PREFIX=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
-          echo "IMAGE_TAG=$GITHUB_SHA" >> "$GITHUB_ENV"
+      - name: Set image prefix (lowercase)
+        run: echo "IMAGE_PREFIX=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build runtime image
-        shell: bash
-        run: >-
-          docker build
-          --tag "$IMAGE_PREFIX/${{ matrix.image }}:$IMAGE_TAG"
-          "${{ matrix.context }}"
-
-      - name: Push immutable runtime image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: bash
-        run: docker push "$IMAGE_PREFIX/${{ matrix.image }}:$IMAGE_TAG"
+      - name: Build${{ github.ref == 'refs/heads/main' && ' and push' || '' }} ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

@@ -25,6 +25,8 @@ jobs:
     env:
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      # 원래 RUBY 스택이 쓰는 ~/ruby 와 반드시 다른 디렉터리여야 한다.
+      # (.env 와 compose 프로젝트명이 겹치면 프록시 스택이 깨진다.)
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
       IMAGE_TAG: ${{ inputs.image_tag }}
     steps:
@@ -114,14 +116,16 @@ jobs:
           rsync "${opts[@]}" /tmp/production.env \
             "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/.env"
 
+      # 이 잡의 GITHUB_TOKEN 은 잡이 끝나면 만료되므로 별도 PAT 가 필요 없다.
+      # pull 이 이 잡 안에서 끝나기 때문에 가능하다.
       - name: Log in to GHCR on server
         env:
-          GHCR_PULL_USER: ${{ secrets.GHCR_PULL_USER }}
-          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          printf '%s' "$GHCR_PULL_TOKEN" | ssh -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes \
+          printf '%s' "$GHCR_TOKEN" | ssh -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "docker login ghcr.io -u '${GHCR_PULL_USER}' --password-stdin"
+            "docker login ghcr.io -u '${GHCR_USER}' --password-stdin"
 
       - name: Pull and redeploy
         run: |
@@ -136,3 +140,11 @@ jobs:
           docker compose -f compose.production.yaml up -d --remove-orphans
           docker image prune -f
           REMOTE
+
+      # 만료될 토큰이 서버의 ~/.docker/config.json 에 남지 않도록 항상 정리한다.
+      - name: Log out of GHCR on server
+        if: always()
+        continue-on-error: true
+        run: |
+          ssh -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "docker logout ghcr.io"
