@@ -1,0 +1,138 @@
+name: Deploy
+
+# CI가 GHCR에 푸시한 이미지(커밋 SHA 태그)를 서버에 배포한다.
+# 수동 실행 전용: Actions 탭 > Deploy > Run workflow 에서 40자리 커밋 SHA를 입력한다.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "배포할 커밋 SHA (40자리). CI가 이미 푸시한 SHA여야 한다."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: benchmark-server
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+    steps:
+      - name: Validate image tag
+        shell: bash
+        run: |
+          if ! [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_tag must be a full 40-character lowercase commit SHA" >&2
+            exit 1
+          fi
+
+      # 이미지와 같은 커밋의 compose.production.yaml을 배포해야 둘이 어긋나지 않는다.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.image_tag }}
+          persist-credentials: false
+
+      - name: Verify images exist in GHCR
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image_prefix="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for image in \
+            benchmark-web-postgres \
+            benchmark-web-redis \
+            benchmark-web-object-store \
+            benchmark-web-mock-integration \
+            benchmark-web-api \
+            benchmark-web-evaluator \
+            benchmark-web-frontend; do
+            docker manifest inspect "$image_prefix/$image:$IMAGE_TAG" >/dev/null \
+              || { echo "missing image: $image_prefix/$image:$IMAGE_TAG (CI가 이 SHA를 푸시했는지 확인)" >&2; exit 1; }
+          done
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+
+      - name: Render production .env
+        shell: bash
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_APP_PASSWORD: ${{ secrets.POSTGRES_APP_PASSWORD }}
+          POSTGRES_UNTRUSTED_PASSWORD: ${{ secrets.POSTGRES_UNTRUSTED_PASSWORD }}
+          POSTGRES_VERIFIER_PASSWORD: ${{ secrets.POSTGRES_VERIFIER_PASSWORD }}
+          RUBY_WEB_OBJECT_ACCESS_KEY: ${{ secrets.RUBY_WEB_OBJECT_ACCESS_KEY }}
+          RUBY_WEB_OBJECT_SECRET_KEY: ${{ secrets.RUBY_WEB_OBJECT_SECRET_KEY }}
+          RUBY_WEB_RESET_TOKEN: ${{ secrets.RUBY_WEB_RESET_TOKEN }}
+          RUBY_EVALUATOR_TOKEN: ${{ secrets.RUBY_EVALUATOR_TOKEN }}
+          RUBY_WEB_OPERATIONS_DIAGNOSTIC_KEY: ${{ secrets.RUBY_WEB_OPERATIONS_DIAGNOSTIC_KEY }}
+          RUBY_WEB_PUBLIC_ORIGIN: ${{ secrets.RUBY_WEB_PUBLIC_ORIGIN }}
+        run: |
+          umask 077
+          image_prefix="ghcr.io/${GITHUB_REPOSITORY,,}"
+          cat > /tmp/production.env <<EOF
+          RUBY_BENCHMARK_IMAGE_PREFIX=${image_prefix}
+          RUBY_BENCHMARK_IMAGE_TAG=${IMAGE_TAG}
+          RUBY_BENCHMARK_PIPELINE_NETWORK=ruby_ai-defense-net
+          RUBY_WEB_PUBLIC_ORIGIN=${RUBY_WEB_PUBLIC_ORIGIN}
+          RUBY_WEB_VULNERABILITY_MODULES=
+          RUBY_WEB_TRIAL_ID=
+          RUBY_WEB_PREPARATION_SEED=
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD}
+          POSTGRES_UNTRUSTED_PASSWORD=${POSTGRES_UNTRUSTED_PASSWORD}
+          POSTGRES_VERIFIER_PASSWORD=${POSTGRES_VERIFIER_PASSWORD}
+          RUBY_WEB_OBJECT_ACCESS_KEY=${RUBY_WEB_OBJECT_ACCESS_KEY}
+          RUBY_WEB_OBJECT_SECRET_KEY=${RUBY_WEB_OBJECT_SECRET_KEY}
+          RUBY_WEB_RESET_TOKEN=${RUBY_WEB_RESET_TOKEN}
+          RUBY_EVALUATOR_TOKEN=${RUBY_EVALUATOR_TOKEN}
+          RUBY_WEB_OPERATIONS_DIAGNOSTIC_KEY=${RUBY_WEB_OPERATIONS_DIAGNOSTIC_KEY}
+          EOF
+
+      - name: Ship compose file and .env
+        run: |
+          opts=(--archive --compress -e "ssh -i $HOME/.ssh/id_ed25519 -o IdentitiesOnly=yes")
+          rsync "${opts[@]}" app/compose.production.yaml \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/compose.production.yaml"
+          rsync "${opts[@]}" /tmp/production.env \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/.env"
+
+      - name: Log in to GHCR on server
+        env:
+          GHCR_PULL_USER: ${{ secrets.GHCR_PULL_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_PULL_TOKEN" | ssh -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "docker login ghcr.io -u '${GHCR_PULL_USER}' --password-stdin"
+
+      - name: Pull and redeploy
+        run: |
+          ssh -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s <<REMOTE
+          set -euo pipefail
+          cd '${DEPLOY_PATH}'
+          network="\$(grep '^RUBY_BENCHMARK_PIPELINE_NETWORK=' .env | cut -d= -f2-)"
+          docker network inspect "\$network" >/dev/null 2>&1 || {
+            echo "network '\$network' not found: start the proxy stack first" >&2; exit 1; }
+          docker compose -f compose.production.yaml pull
+          docker compose -f compose.production.yaml up -d --remove-orphans
+          docker image prune -f
+          REMOTE

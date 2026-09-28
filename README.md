@@ -204,8 +204,6 @@ Set-Location benchmark\benchmarks\web-defense-benchmark
 ### Linux 또는 macOS
 
 ```bash
-cd benchmark/benchmarks/web-defense-benchmark
-
 # 정상 웹 실행
 ./scripts/benchmark.sh start normal
 ```

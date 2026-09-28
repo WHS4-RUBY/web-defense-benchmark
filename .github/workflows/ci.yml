@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  contracts-and-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Validate Compose configuration
+        run: |
+          docker compose -f app/compose.yaml config --quiet
+          docker compose \
+            --env-file app/.env.production.example \
+            -f app/compose.production.yaml \
+            config --quiet
+
+      - name: Run contract and application tests
+        env:
+          PYTHONPATH: app/backend:app/evaluator:app/runner:app/tools
+        run: >-
+          python -m pytest -q
+          tests
+          app/backend/tests
+          app/evaluator/tests
+          app/runner/tests
+
+      - name: Check shell launcher syntax
+        run: |
+          bash -n scripts/benchmark.sh
+          bash -n scripts/defense.sh
+
+  runtime-images:
+    needs: contracts-and-tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: benchmark-web-postgres
+            context: app/postgres
+          - image: benchmark-web-redis
+            context: app/redis
+          - image: benchmark-web-object-store
+            context: app/object-store
+          - image: benchmark-web-mock-integration
+            context: app/mock-integration
+          - image: benchmark-web-api
+            context: app/backend
+          - image: benchmark-web-evaluator
+            context: app/evaluator
+          - image: benchmark-web-frontend
+            context: app/frontend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set image coordinates
+        shell: bash
+        run: |
+          echo "IMAGE_PREFIX=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$GITHUB_SHA" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build runtime image
+        shell: bash
+        run: >-
+          docker build
+          --tag "$IMAGE_PREFIX/${{ matrix.image }}:$IMAGE_TAG"
+          "${{ matrix.context }}"
+
+      - name: Push immutable runtime image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: docker push "$IMAGE_PREFIX/${{ matrix.image }}:$IMAGE_TAG"
