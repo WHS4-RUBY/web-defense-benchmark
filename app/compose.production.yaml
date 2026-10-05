@@ -142,6 +142,43 @@ services:
       pipeline:
         aliases: [ruby-web-target]
       edge:
+      # 벤치마크 프록시(/ruby-shop)가 프런트엔드에 직접 도달하기 위한 전용 망.
+      benchmark-edge:
+
+  # 벤치마크 대상 #1: OWASP Juice Shop (공용 이미지, digest 고정).
+  # pipeline(탐지/방어 공유망)에는 연결하지 않는다. 벤치마크 전용
+  # benchmark-proxy 를 통해서만 노출되는 분리된 대상이다.
+  juice-shop:
+    image: bkimminich/juice-shop@sha256:73c53fbf442e8337b3ea3d98c7e8550308854701ebdfce4cc39768f36b75430e
+    environment:
+      NODE_ENV: ${JUICE_SHOP_NODE_ENV:-unsafe}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/rest/admin/application-version',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks: [benchmark-edge]
+
+  # 벤치마크 대상 전용 리버스 프록시. 호스트 포트로 노출되는 유일한 서비스로,
+  # 탐지/방어 파이프라인과 분리된 독립 진입점이다.
+  #   /juice-shop/ -> juice-shop:3000,  /ruby-shop/ -> web:8080
+  benchmark-proxy:
+    image: ${RUBY_BENCHMARK_IMAGE_PREFIX:?Set RUBY_BENCHMARK_IMAGE_PREFIX}/benchmark-web-benchmark-proxy:${RUBY_BENCHMARK_IMAGE_TAG:?Set RUBY_BENCHMARK_IMAGE_TAG}
+    depends_on:
+      web: {condition: service_healthy}
+      juice-shop: {condition: service_healthy}
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    ports:
+      - "${BENCHMARK_PROXY_BIND:-0.0.0.0}:${BENCHMARK_PROXY_PORT:-3020}:8080"
+    networks: [benchmark-edge]
 
 networks:
   pipeline:
@@ -149,6 +186,8 @@ networks:
     name: ${RUBY_BENCHMARK_PIPELINE_NETWORK:-ruby_ai-defense-net}
   edge:
     internal: true
+  # 벤치마크 프록시 진입 전용 망. 호스트 포트 노출을 위해 internal 이 아니다.
+  benchmark-edge:
   data:
     internal: true
   control:

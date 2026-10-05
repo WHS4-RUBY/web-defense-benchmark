@@ -93,6 +93,8 @@ jobs:
             context: app/evaluator
           - image: benchmark-web-frontend
             context: app/frontend
+          - image: benchmark-web-benchmark-proxy
+            context: app/benchmark-proxy
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
