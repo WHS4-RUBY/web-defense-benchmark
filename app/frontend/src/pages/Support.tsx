@@ -4,6 +4,7 @@ import {
   SellerDocument,
   Ticket,
   User,
+  apiPath,
   get,
   send,
   upload,
@@ -239,7 +240,7 @@ export function Support({
                         </button>
                         <a
                           className="badge"
-                          href={`/api/support/tickets/${ticket.id}/html-preview`}
+                          href={apiPath(`/api/support/tickets/${ticket.id}/html-preview`)}
                           target="_blank"
                           rel="noreferrer"
                         >
@@ -390,7 +391,7 @@ export function Support({
                     <td>
                       <a
                         className="badge"
-                        href={`/api/support/documents/${document.id}/preview`}
+                        href={apiPath(`/api/support/documents/${document.id}/preview`)}
                         target="_blank"
                         rel="noreferrer"
                       >

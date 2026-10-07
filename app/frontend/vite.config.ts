@@ -1,3 +1,4 @@
 import { defineConfig } from "vite";
 
-export default defineConfig({});
+// Relative assets work both at the pipeline root and under /ruby-shop/.
+export default defineConfig({ base: "./" });

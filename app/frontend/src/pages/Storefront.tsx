@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import {
   ApiError,
   Product,
+  apiPath,
   get,
   money,
   send,
@@ -139,7 +140,7 @@ export function Storefront({
           {products.map((product) => (
             <article className="card" key={product.id}>
               {product.image_path && (
-                <img className="thumb" src={product.image_path} alt="" />
+                <img className="thumb" src={apiPath(product.image_path)} alt="" />
               )}
               <h3>{product.name}</h3>
               <p className="muted">{product.description}</p>
@@ -204,7 +205,7 @@ export function Storefront({
             <div className="row">
               <a
                 className="badge"
-                href={selected.shop_recent_orders_path}
+                href={apiPath(selected.shop_recent_orders_path)}
                 target="_blank"
                 rel="noreferrer"
               >

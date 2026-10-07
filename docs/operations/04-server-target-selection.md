@@ -1,89 +1,60 @@
-# 서버 벤치마크 대상 전환
+# 서버 벤치마크 대상 선택
 
-팀 루트 스택은 기본적으로 Juice Shop을 사용합니다. 자체 취약점 웹은 별도 8개 서비스
-스택으로 실행하고 Defense의 전달 주소만 바꿉니다. 두 대상은 함께 실행할 수 있지만 한
-시험에서는 하나만 선택하고, 사용한 오버레이와 이미지 태그를 시험 설정에 기록합니다.
+`benchmark-proxy`는 Detection/Defense를 거치지 않는 별도 실험 진입점입니다. 이
+저장소의 대상 분리 변경이 배포되면 3020 포트에서 두 대상을 경로로 고릅니다.
+
+| 경로 | 대상 |
+| --- | --- |
+| `/` | 대상 선택 안내 |
+| `/juice-shop/` | OWASP Juice Shop |
+| `/ruby-shop/` | RUBY Market |
+
+3020 포트의 동작은 80 포트 파이프라인의 Defense 전달 대상을 바꾸지 않습니다.
+`ruby` 저장소의 대상 전환 Compose 오버레이는 현재 존재하지 않으므로, 이 문서의
+과거 `docker-compose.target.*.yml` 명령은 사용할 수 없습니다. 80 포트로 대상을
+전환하려면 `ruby` 저장소에서 Defense 대상 설정과 재생성 절차를 먼저 구현해야 합니다.
 
 ## 사전 조건
 
-- PR #17과 #18이 병합된 현재 경로는 `Detection -> Defense -> Target`입니다. 별도
-  Policy 서비스는 없으며 Detection이 `X-Defense-Plan`을 만들어 Defense로 전달합니다.
-- 루트 `.env`의 `RUBY_PIPELINE_NETWORK`와 자체 웹 `.env.production`의
-  `RUBY_BENCHMARK_PIPELINE_NETWORK`를 같은 값으로 둡니다. 기본값은 둘 다
+- `ruby` 스택의 파이프라인 네트워크가 실행 중이어야 합니다. 이 스택의
+  `RUBY_BENCHMARK_PIPELINE_NETWORK`를 해당 네트워크 이름과 맞춥니다. 기본값은
   `ruby_ai-defense-net`입니다.
-- 루트 스택의 해당 파이프라인 네트워크가 실행 중이어야 합니다.
-- 자체 웹의 `.env.production`에는 실제 운영 비밀값과 커밋 SHA 이미지 태그를 넣습니다.
-- 외부 사용자가 보는 Detection 주소를 `CSRF_ALLOWED_ORIGINS`에 넣습니다. 내부 대상
-  주소인 `ruby-web-target`을 넣는 항목이 아닙니다.
-- 실제 `.env`와 `.env.production`은 커밋하지 않습니다.
+- CI가 게시한 동일한 커밋 SHA의 벤치마크 이미지와 실제 운영 비밀값을
+  `app/.env.production`에 설정합니다. 실제 `.env` 파일은 커밋하지 않습니다.
+- `RUBY_WEB_PUBLIC_ORIGIN`은 브라우저에서 사용하는 주소의 Origin으로 설정합니다.
+  현재 API는 역할 변경 폼의 Origin을 단일 값과 비교합니다. 80과 3020은 서로 다른
+  Origin이므로 두 경로에서 그 폼을 동시에 정상 사용하려면 별도 복수 Origin 지원이
+  필요합니다.
 
-## 자체 취약점 웹 선택
+## 벤치마크 진입점 실행
 
-저장소 루트에서 자체 웹 운영 스택을 먼저 실행합니다.
-
-```bash
-docker compose \
-  --env-file benchmark/benchmarks/web-defense-benchmark/app/.env.production \
-  -f benchmark/benchmarks/web-defense-benchmark/app/compose.production.yaml \
-  pull
-docker compose \
-  --env-file benchmark/benchmarks/web-defense-benchmark/app/.env.production \
-  -f benchmark/benchmarks/web-defense-benchmark/app/compose.production.yaml \
-  up -d --wait
-```
-
-Defense를 자체 웹 주소로 다시 만든 뒤 Detection도 다시 만듭니다. PR #17의 Session,
-Resolved Actor와 Client Flow 상태는 Detection 메모리에 누적되므로 대상을 바꾸면서
-기존 프로세스를 재사용하면 이전 대상의 점수와 식별 상태가 섞입니다.
+이 저장소 루트에서 실행합니다. 대상 분리 변경의 CI 이미지가 게시되기 전에는
+`benchmark-proxy` 이미지가 없어 아래 절차를 완료할 수 없습니다.
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.target.ruby-web.yml \
-  up -d --no-deps --force-recreate defense
-docker compose \
-  -f docker-compose.yml \
-  up -d --no-deps --force-recreate detection
+docker compose --env-file app/.env.production -f app/compose.production.yaml config --quiet
+docker compose --env-file app/.env.production -f app/compose.production.yaml pull
+docker compose --env-file app/.env.production -f app/compose.production.yaml up -d --wait
 ```
 
-## Juice Shop 복귀
+기본 호스트 바인드는 `0.0.0.0:3020`입니다. 다른 주소나 포트가 필요하면
+`BENCHMARK_PROXY_BIND`, `BENCHMARK_PROXY_PORT`를 변경합니다. 운영 배포
+워크플로는 `app/compose.production.yaml`과 같은 커밋의 이미지를 사용합니다.
+
+종료할 때는 다음 명령을 사용합니다. 데이터까지 지울 때만 `--volumes`를 추가합니다.
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.target.juice-shop.yml \
-  up -d --no-deps --force-recreate defense
-docker compose \
-  -f docker-compose.yml \
-  up -d --no-deps --force-recreate detection
+docker compose --env-file app/.env.production -f app/compose.production.yaml down
 ```
 
-자체 웹이 더 필요하지 않으면 해당 스택만 종료합니다. 데이터까지 지울 때만 `--volumes`를
-추가합니다.
+## 실험 격리
 
-```bash
-docker compose \
-  --env-file benchmark/benchmarks/web-defense-benchmark/app/.env.production \
-  -f benchmark/benchmarks/web-defense-benchmark/app/compose.production.yaml \
-  down
-```
+`web`만 80 포트 파이프라인 네트워크에 `ruby-web-target` 이름으로 연결됩니다.
+`juice-shop`과 `benchmark-proxy`는 그 네트워크에 연결되지 않습니다. API, 평가기,
+데이터 서비스는 호스트 포트를 열지 않습니다.
 
-## 격리 조건
-
-외부 공개 진입점은 Detection입니다. 자체 웹의 `web` 서비스만 공유망에
-`ruby-web-target`으로 연결합니다. API, 평가기, 데이터 서비스와 관리 UI는 이 경로에
-연결하지 않습니다. 초기화와 판정 요청은 운영 제어 경로에서만 실행합니다.
-
-`X-Experiment-Run-ID`는 실행 기록을 구분하는 관측값이며 Detection의 누적 상태를
-초기화하지 않습니다. 공식 시험은 실행별 격리 스택을 사용하거나 Detection을 재생성해
-이전 시험의 점수가 다음 시험에 들어가지 않게 합니다. 스키마 학습 파일은 별도 volume에
-남으므로 어떤 학습 파일을 사용했는지도 시험 설정에 기록합니다.
-
-루트 Deploy workflow는 기본 Juice Shop 파이프라인을 갱신하고 자체 웹 Compose와
-오버레이 파일을 서버에 복사합니다. 자체 웹 활성화와 취약점 모듈 선택은 자동으로 하지
-않습니다. `Web Defense Benchmark` workflow가 같은 커밋 SHA의 자체 웹 이미지 7종을
-발행한 뒤 위 절차로 명시적으로 전환합니다.
-
-배포 전 로컬 왕복 검사는 벤치마크 루트에서 `./scripts/check_target_switch.sh`로 실행합니다.
-검사는 초기화, 비공개 성공 판정, 판정기 읽기 전용 권한과 네트워크 격리를 확인하고
-Defense를 자체 웹과 Juice Shop에 차례로 연결한 뒤 자신이 만든 임시 자원을 정리합니다.
+3020의 RUBY Market과 80에서 `ruby-web-target`을 선택했을 때의 RUBY Market은
+같은 `web` 및 데이터 서비스를 사용합니다. 두 경로를 동시에 시험하면 상태가 섞일
+수 있으므로 실행별 초기화나 격리 스택이 필요합니다. Detection의 누적 상태는
+대상 전환 시 별도로 초기화해야 합니다. `X-Experiment-Run-ID`는 실행 기록을
+구분하지만 상태를 초기화하지 않습니다.
