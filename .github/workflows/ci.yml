@@ -62,6 +62,10 @@ jobs:
         working-directory: app/frontend
         run: npm run build
 
+      - name: Check frontend routes
+        working-directory: app/frontend
+        run: npm run test:routes
+
       - name: Audit frontend dependencies
         working-directory: app/frontend
         run: npm audit --audit-level=moderate
@@ -93,6 +97,8 @@ jobs:
             context: app/evaluator
           - image: benchmark-web-frontend
             context: app/frontend
+          - image: benchmark-web-benchmark-proxy
+            context: app/benchmark-proxy
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 

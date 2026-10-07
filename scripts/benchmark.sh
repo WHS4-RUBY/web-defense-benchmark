@@ -34,6 +34,7 @@ case "$action" in
         ;;
     esac
     echo "RUBY benchmark is ready at http://127.0.0.1:18080"
+    echo "Benchmark targets (proxy): http://127.0.0.1:${BENCHMARK_PROXY_PORT:-3020}/juice-shop/ , /ruby-shop/"
     echo "Mode: $mode"
     if [[ "$mode" == "vulnerable" ]]; then
       echo "Modules: $modules"

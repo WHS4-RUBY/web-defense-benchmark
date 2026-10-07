@@ -95,6 +95,15 @@ function authorization(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// The benchmark entry serves this app below /ruby-shop/, while the defense
+// pipeline serves the same image at /. Keep API calls on the selected entry.
+export function apiPath(path: string): string {
+  if (path.startsWith("/api/") && window.location.pathname.startsWith("/ruby-shop/")) {
+    return `/ruby-shop${path}`;
+  }
+  return path;
+}
+
 async function failure(response: Response): Promise<never> {
   let detail = `${response.status}`;
   try {
@@ -113,7 +122,7 @@ async function failure(response: Response): Promise<never> {
 }
 
 export async function get<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: authorization() });
+  const response = await fetch(apiPath(path), { headers: authorization() });
   if (!response.ok) {
     return failure(response);
   }
@@ -125,7 +134,7 @@ export async function send<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiPath(path), {
     method,
     headers: {
       ...authorization(),
@@ -146,7 +155,7 @@ export async function upload<T>(
   path: string,
   form: FormData,
 ): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiPath(path), {
     method: "POST",
     headers: authorization(),
     body: form,

@@ -58,7 +58,8 @@ jobs:
             benchmark-web-mock-integration \
             benchmark-web-api \
             benchmark-web-evaluator \
-            benchmark-web-frontend; do
+            benchmark-web-frontend \
+            benchmark-web-benchmark-proxy; do
             docker manifest inspect "$image_prefix/$image:$IMAGE_TAG" >/dev/null \
               || { echo "missing image: $image_prefix/$image:$IMAGE_TAG (CI가 이 SHA를 푸시했는지 확인)" >&2; exit 1; }
           done
@@ -97,6 +98,9 @@ jobs:
           RUBY_WEB_VULNERABILITY_MODULES=
           RUBY_WEB_TRIAL_ID=
           RUBY_WEB_PREPARATION_SEED=
+          BENCHMARK_PROXY_PORT=3020
+          BENCHMARK_PROXY_BIND=0.0.0.0
+          JUICE_SHOP_NODE_ENV=unsafe
           POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
           POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD}
           POSTGRES_UNTRUSTED_PASSWORD=${POSTGRES_UNTRUSTED_PASSWORD}

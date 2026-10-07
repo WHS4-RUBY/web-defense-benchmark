@@ -134,7 +134,37 @@ services:
       api: {condition: service_healthy}
     ports:
       - "127.0.0.1:${RUBY_PUBLIC_PORT:-18080}:8080"
-    networks: [edge, attacker]
+    networks: [edge, attacker, benchmark-edge]
+
+  # 벤치마크 대상 #1: OWASP Juice Shop (공용 이미지, digest 고정).
+  # 탐지/방어와 분리된 벤치마크 전용 진입점(benchmark-proxy)에서만 노출된다.
+  juice-shop:
+    image: bkimminich/juice-shop@sha256:73c53fbf442e8337b3ea3d98c7e8550308854701ebdfce4cc39768f36b75430e
+    environment:
+      NODE_ENV: ${JUICE_SHOP_NODE_ENV:-unsafe}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/rest/admin/application-version',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [benchmark-edge]
+
+  # 벤치마크 대상 전용 리버스 프록시.
+  #   /juice-shop/ -> juice-shop:3000,  /ruby-shop/ -> web:8080
+  benchmark-proxy:
+    image: ${RUBY_IMAGE_PREFIX:-ruby-web-defense-benchmark}-benchmark-proxy:latest
+    build: ./benchmark-proxy
+    depends_on:
+      web: {condition: service_started}
+      juice-shop: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:${BENCHMARK_PROXY_PORT:-3020}:8080"
+    networks: [benchmark-edge]
 
 networks:
   edge:
@@ -142,6 +172,8 @@ networks:
   # 인터넷에서 이 서비스를 보는 것과 같은 시야를 강제한다.
   attacker:
     internal: true
+  # 벤치마크 프록시와 두 대상(web, juice-shop)을 잇는 전용 망.
+  benchmark-edge:
   data:
     internal: true
   control:

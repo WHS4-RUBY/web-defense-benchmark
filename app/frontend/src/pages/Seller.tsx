@@ -4,6 +4,7 @@ import {
   Order,
   Product,
   User,
+  apiPath,
   get,
   money,
   send,
@@ -529,7 +530,7 @@ export function Seller({
             <ul>
               {reports.available_reports.map((report) => (
                 <li key={report.name}>
-                  <a href={report.download_path} target="_blank" rel="noreferrer">
+                  <a href={apiPath(report.download_path)} target="_blank" rel="noreferrer">
                     {report.name}
                   </a>
                 </li>
@@ -544,7 +545,7 @@ export function Seller({
         <p className="muted">
           공개 상점 페이지에서 보이는 것과 같은 목록입니다.{" "}
           {user && (
-            <a href={`/api/shops/${user.id}/recent-orders`} target="_blank" rel="noreferrer">
+            <a href={apiPath(`/api/shops/${user.id}/recent-orders`)} target="_blank" rel="noreferrer">
               열기
             </a>
           )}
