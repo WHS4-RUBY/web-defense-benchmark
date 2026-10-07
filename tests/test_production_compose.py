@@ -67,7 +67,7 @@ def test_production_compose_uses_registry_images_without_host_ports() -> None:
             assert "@sha256:" in service["image"]
 
 
-def test_only_web_joins_the_pipeline_network() -> None:
+def test_only_targets_join_the_pipeline_network() -> None:
     services = load_compose()["services"]
 
     # web 은 탐지/방어 공유망(pipeline)에 ruby-web-target 으로 참여하고,
@@ -76,25 +76,71 @@ def test_only_web_joins_the_pipeline_network() -> None:
     assert services["web"]["networks"]["pipeline"]["aliases"] == [
         "ruby-web-target"
     ]
-    # pipeline 에 들어가는 서비스는 web 하나뿐이다. 벤치마크 대상/프록시는
-    # 공유망을 거치지 않는 분리된 경로로만 서로 통신한다.
+    # Defense 는 같은 외부 네트워크에서 대상 이름을 조회한다.
+    assert network_names(services["juice-shop"]) == {"pipeline", "benchmark-edge"}
+    assert services["juice-shop"]["networks"]["pipeline"]["aliases"] == [
+        "juice-shop-target"
+    ]
+    # 3020 프록시는 취약한 대상과 같은 Origin 이므로 관리망에 연결하지 않는다.
+    assert network_names(services["benchmark-proxy"]) == {"benchmark-edge"}
     assert all(
         "pipeline" not in network_names(service)
         for name, service in services.items()
-        if name != "web"
+        if name not in {"web", "juice-shop"}
     )
 
 
-def test_benchmark_entry_is_isolated_from_the_pipeline() -> None:
+def test_only_benchmark_proxy_publishes_target_ports() -> None:
     services = load_compose()["services"]
 
-    # 벤치마크 대상(juice-shop)과 프록시는 benchmark-edge 에서만 묶이고
-    # 탐지/방어 공유망(pipeline)에는 연결되지 않는다.
-    assert network_names(services["juice-shop"]) == {"benchmark-edge"}
-    assert network_names(services["benchmark-proxy"]) == {"benchmark-edge"}
-    # 프록시만 호스트 포트를 연다.
     assert "ports" in services["benchmark-proxy"]
     assert "ports" not in services["juice-shop"]
+    assert services["benchmark-proxy"]["ports"] == [
+        "${BENCHMARK_PROXY_BIND:-0.0.0.0}:${BENCHMARK_PROXY_PORT:-3020}:8080",
+        "${BENCHMARK_PROXY_BIND:-0.0.0.0}:${BENCHMARK_JUICE_ROOT_PORT:-3021}:8081",
+        "${BENCHMARK_PROXY_BIND:-0.0.0.0}:${BENCHMARK_RUBY_ROOT_PORT:-3022}:8082",
+    ]
+
+
+def test_public_selector_never_proxies_management_routes() -> None:
+    config = (ROOT / "app" / "benchmark-proxy" / "nginx.conf").read_text(
+        encoding="utf-8"
+    )
+    assert "proxy_pass http://$detection" not in config
+    assert "location = /__detection/api/" not in config
+    assert "location ^~ /__detection/ {" in config
+    assert "location ^~ /__defense/ { return 404; }" in config
+
+    selector = (ROOT / "app" / "benchmark-proxy" / "selector.html").read_text(
+        encoding="utf-8"
+    )
+    script = (ROOT / "app" / "benchmark-proxy" / "selector.js").read_text(
+        encoding="utf-8"
+    )
+    assert 'href="/juice-shop/"' in selector
+    assert 'href="/ruby-shop/"' in selector
+    assert 'http://127.0.0.1:8088/__detection/dashboard' in script
+    assert 'ssh -L 8088:127.0.0.1:8088 root@158.247.253.127' in selector
+    assert 'protectedUrl.port = "80"' in script
+    assert "fetch(" not in script
+
+
+def test_remote_installer_urls_serve_targets_at_root() -> None:
+    config = (ROOT / "app" / "benchmark-proxy" / "nginx.conf").read_text(
+        encoding="utf-8"
+    )
+    # A prefix target URL would double SPA and API paths in Defense. The
+    # additional listeners hand an entire root path to one target each.
+    assert "listen 8081;" in config
+    assert "listen 8082;" in config
+    assert "proxy_pass http://$juice_shop;" in config
+    assert "proxy_pass http://$ruby_shop;" in config
+    assert "BENCHMARK_JUICE_ROOT_PORT=3021" in (
+        ROOT / "app" / ".env.production.example"
+    ).read_text(encoding="utf-8")
+    assert "BENCHMARK_RUBY_ROOT_PORT=3022" in (
+        ROOT / "app" / ".env.production.example"
+    ).read_text(encoding="utf-8")
 
 
 def test_evaluator_and_data_services_remain_private() -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 
 IMPLEMENTED_VULNERABILITY_MODULES = frozenset(
@@ -40,6 +41,37 @@ IMPLEMENTED_VULNERABILITY_MODULES = frozenset(
 )
 
 
+def _additional_public_origins(value: str) -> frozenset[str]:
+    """Parse only literal browser origins; never accept paths or wildcards."""
+    origins: set[str] = set()
+    for entry in value.split(","):
+        origin = entry.strip()
+        if not origin:
+            continue
+        try:
+            parsed = urlsplit(origin)
+            port = parsed.port
+        except ValueError as error:
+            raise RuntimeError("RUBY_WEB_PUBLIC_ORIGINS contains an invalid origin") from error
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or "*" in parsed.netloc
+            or any(char.isspace() for char in parsed.netloc)
+            or parsed.netloc.endswith(":")
+            or origin != f"{parsed.scheme}://{parsed.netloc}"
+            or (port is not None and not 1 <= port <= 65535)
+        ):
+            raise RuntimeError("RUBY_WEB_PUBLIC_ORIGINS must contain plain HTTP origins")
+        origins.add(origin)
+    return frozenset(origins)
+
+
 @dataclass(frozen=True)
 class Settings:
     environment: str
@@ -56,12 +88,16 @@ class Settings:
     vulnerability_modules: frozenset[str] = frozenset()
     mock_integration_origin: str = "http://mock-integration:8000"
     public_origin: str = "http://127.0.0.1:18080"
+    additional_public_origins: frozenset[str] = frozenset()
     report_root: str = "/app/benchmark-files"
     # 초기화가 파일 자리를 되돌릴 때 쓰는 원본이다. 비어 있으면
     # 자리 이름에 -origin 을 붙인 곳을 본다.
     report_origin_root: str = ""
     operations_diagnostic_key: str = "ops_sk_live_9f4c27ab1e6d0538"
     untrusted_database_url: str | None = None
+
+    def allows_public_origin(self, origin: str) -> bool:
+        return origin == self.public_origin or origin in self.additional_public_origins
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -104,6 +140,9 @@ class Settings:
             public_origin=os.getenv(
                 "RUBY_WEB_PUBLIC_ORIGIN", "http://127.0.0.1:18080"
             ).rstrip("/"),
+            additional_public_origins=_additional_public_origins(
+                os.getenv("RUBY_WEB_PUBLIC_ORIGINS", "")
+            ),
             report_root=os.getenv("RUBY_WEB_REPORT_ROOT", "/app/benchmark-files"),
             report_origin_root=os.getenv("RUBY_WEB_REPORT_ORIGIN_ROOT", ""),
             operations_diagnostic_key=os.getenv(
