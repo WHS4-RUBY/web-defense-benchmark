@@ -1,8 +1,14 @@
 name: Deploy
 
-# CI가 GHCR에 푸시한 이미지(커밋 SHA 태그)를 서버에 배포한다.
-# 수동 실행 전용: Actions 탭 > Deploy > Run workflow 에서 40자리 커밋 SHA를 입력한다.
+# main CI가 GHCR에 푸시한 이미지(커밋 SHA 태그)를 자동 배포한다.
+# workflow_dispatch는 이미 게시된 SHA의 수동 재배포를 위해 유지한다.
 on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "CI가 푸시한 40자리 커밋 SHA"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       image_tag:
@@ -19,7 +25,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+    steps:
+      - name: Validate image tag and skip outdated automatic runs
+        id: check
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_tag must be a full 40-character lowercase commit SHA" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" || "$IMAGE_TAG" != "$GITHUB_SHA" ]]; then
+              echo "Automatic deployment must use the main push SHA" >&2
+              exit 1
+            fi
+            latest_main="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+            if [[ -z "$latest_main" ]]; then
+              echo "Could not resolve the current main SHA" >&2
+              exit 1
+            fi
+            if [[ "$IMAGE_TAG" != "$latest_main" ]]; then
+              echo "Skipping outdated CI commit $IMAGE_TAG; current main is $latest_main"
+              echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+
   deploy:
+    needs: prepare
+    if: needs.prepare.outputs.should_deploy == 'true'
     runs-on: ubuntu-24.04
     environment: benchmark-server
     env:
@@ -30,14 +72,6 @@ jobs:
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
       IMAGE_TAG: ${{ inputs.image_tag }}
     steps:
-      - name: Validate image tag
-        shell: bash
-        run: |
-          if ! [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "image_tag must be a full 40-character lowercase commit SHA" >&2
-            exit 1
-          fi
-
       # 이미지와 같은 커밋의 compose.production.yaml을 배포해야 둘이 어긋나지 않는다.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

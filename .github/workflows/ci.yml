@@ -123,3 +123,15 @@ jobs:
           tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  deploy:
+    # Merge 후 main CI가 검증하고 게시한 동일 SHA의 이미지가 모두 준비되면 배포한다.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: runtime-images
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      image_tag: ${{ github.sha }}
+    secrets: inherit
