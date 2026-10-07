@@ -47,8 +47,15 @@ RUBY Market은 의도적으로 취약한 테스트 대상이므로, 같은 Origi
 
 ## 실행
 
-이 저장소 루트에서 실행합니다. RUBY 스택을 먼저 올려 공유 네트워크를
-만들어야 합니다.
+`main`에 변경이 merge되면 CI가 테스트를 통과하고 이미지 8개를 모두 GHCR에
+게시한 다음, 동일한 커밋 SHA로 서버 배포를 자동 실행합니다. PR과 기능 브랜치
+push는 서버에 배포하지 않습니다. 이전 SHA를 다시 배포해야 할 때만 GitHub
+Actions의 `Deploy` 워크플로를 수동 실행하고, 이미 게시된 40자리 SHA를
+`image_tag`에 입력합니다. 오래된 CI가 나중에 끝나더라도 현재 `main`과 다른
+SHA라면 자동 배포를 건너뜁니다.
+
+서버에서 수동으로 실행할 경우에는 이 저장소 루트에서 다음 명령을 사용합니다.
+RUBY 스택을 먼저 올려 공유 네트워크를 만들어야 합니다.
 
 ```bash
 docker compose --env-file app/.env.production -f app/compose.production.yaml config --quiet
