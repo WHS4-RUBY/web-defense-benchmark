@@ -1,35 +1,54 @@
 # 서버 벤치마크 대상 선택
 
-`benchmark-proxy`는 Detection/Defense를 거치지 않는 별도 실험 진입점입니다. 이
-저장소의 대상 분리 변경이 배포되면 3020 포트에서 두 대상을 경로로 고릅니다.
+SSH 터널로 여는 관리자 화면에서 포트 80의 보호 대상을 선택합니다. 3020 포트는 두 대상을
+탐지·방어 없이 직접 열어 원본 동작을 비교하는 별도 진입점입니다.
 
-| 경로 | 대상 |
-| --- | --- |
-| `/` | 대상 선택 안내 |
-| `/juice-shop/` | OWASP Juice Shop |
-| `/ruby-shop/` | RUBY Market |
+| 주소 | 용도 | 탐지·방어 기록 |
+| --- | --- | --- |
+| `http://127.0.0.1:8088/__detection/dashboard` | SSH 터널을 통한 현재 보호 대상 확인·변경, 탐지 대시보드 | 관리 요청은 기록 대상이 아님 |
+| `http://127.0.0.1:8088/__defense/dashboard` | SSH 터널을 통한 방어 대시보드 | 관리 요청은 기록 대상이 아님 |
+| `http://HOST/` | 선택한 대상에 공격·정상 요청 전송 | 기록됨 |
+| `http://HOST:3020/` | 관리자·보호 경로 및 직접 접속 안내 | 기록되지 않음 |
+| `http://HOST:3020/juice-shop/` | Juice Shop 직접 접속 | 기록되지 않음 |
+| `http://HOST:3020/ruby-shop/` | RUBY Market 직접 접속 | 기록되지 않음 |
+| `http://HOST:3021/` | Juice Shop 루트 URL, 다른 컴퓨터의 RUBY 대상 등록용 | 이 서버의 대시보드에는 기록되지 않음 |
+| `http://HOST:3022/` | RUBY Market 루트 URL, 다른 컴퓨터의 RUBY 대상 등록용 | 이 서버의 대시보드에는 기록되지 않음 |
 
-3020 포트의 동작은 80 포트 파이프라인의 Defense 전달 대상을 바꾸지 않습니다.
-`ruby` 저장소의 대상 전환 Compose 오버레이는 현재 존재하지 않으므로, 이 문서의
-과거 `docker-compose.target.*.yml` 명령은 사용할 수 없습니다. 80 포트로 대상을
-전환하려면 `ruby` 저장소에서 Defense 대상 설정과 재생성 절차를 먼저 구현해야 합니다.
+관리자 화면을 열려면 사용자 컴퓨터에서 SSH 터널을 먼저 실행합니다.
+
+```bash
+ssh -L 8088:127.0.0.1:8088 root@158.247.253.127
+```
+
+3020 선택 안내 페이지에는 현재 대상 상태나 로그인·전환 API가 없습니다.
+직접 접속 링크를 누르는 동작도 보호 대상을 바꾸지 않습니다. Juice Shop과
+RUBY Market은 의도적으로 취약한 테스트 대상이므로, 같은 Origin인 3020에서
+관리자 세션을 사용하지 않도록 관리 기능을 서버의 loopback 포트 8088로
+분리합니다. 8088은 외부에 직접 공개하지 않습니다.
 
 ## 사전 조건
 
-- `ruby` 스택의 파이프라인 네트워크가 실행 중이어야 합니다. 이 스택의
-  `RUBY_BENCHMARK_PIPELINE_NETWORK`를 해당 네트워크 이름과 맞춥니다. 기본값은
-  `ruby_ai-defense-net`입니다.
-- CI가 게시한 동일한 커밋 SHA의 벤치마크 이미지와 실제 운영 비밀값을
+- RUBY 스택이 대상 선택 API와 loopback 관리자 포트 8088을 제공하고
+  `ruby_ai-defense-net` 공유 네트워크에서 실행 중이어야 합니다. 다른 네트워크
+  이름을 쓰면 `RUBY_BENCHMARK_PIPELINE_NETWORK`를 동일하게 설정합니다.
+- RUBY의 대상 목록에 `ruby-shop`과 `juice-shop`이 등록돼 있어야 합니다.
+  이 저장소는 같은 공유망에서 `ruby-web-target:8080`과
+  `juice-shop-target:3000`을 제공합니다.
+- CI가 게시한 동일한 커밋 SHA의 벤치마크 이미지와 운영 비밀값을
   `app/.env.production`에 설정합니다. 실제 `.env` 파일은 커밋하지 않습니다.
-- `RUBY_WEB_PUBLIC_ORIGIN`은 브라우저에서 사용하는 주소의 Origin으로 설정합니다.
-  현재 API는 역할 변경 폼의 Origin을 단일 값과 비교합니다. 80과 3020은 서로 다른
-  Origin이므로 두 경로에서 그 폼을 동시에 정상 사용하려면 별도 복수 Origin 지원이
-  필요합니다.
+- `RUBY_WEB_PUBLIC_ORIGIN`은 기본 브라우저 Origin으로 설정합니다. 직접 접속
+  `:3020`, `:3022`와 보호 경로 `:80`을 사용할 때는 다른 Origin을
+  `RUBY_WEB_PUBLIC_ORIGINS`에 추가합니다. 예를 들어 기본값을
+  `http://158.247.253.127:3020`으로 둔다면 추가값은
+  `http://158.247.253.127,http://158.247.253.127:3022`입니다. 배포
+  워크플로는 현재 서버에 대해 이 세 Origin을 자동으로 설정합니다. 쉼표로
+  구분한 정확한 HTTP(S) Origin만
+  허용하며 경로나 와일드카드는 사용할 수 없습니다.
 
-## 벤치마크 진입점 실행
+## 실행
 
-이 저장소 루트에서 실행합니다. 대상 분리 변경의 CI 이미지가 게시되기 전에는
-`benchmark-proxy` 이미지가 없어 아래 절차를 완료할 수 없습니다.
+이 저장소 루트에서 실행합니다. RUBY 스택을 먼저 올려 공유 네트워크를
+만들어야 합니다.
 
 ```bash
 docker compose --env-file app/.env.production -f app/compose.production.yaml config --quiet
@@ -37,24 +56,50 @@ docker compose --env-file app/.env.production -f app/compose.production.yaml pul
 docker compose --env-file app/.env.production -f app/compose.production.yaml up -d --wait
 ```
 
-기본 호스트 바인드는 `0.0.0.0:3020`입니다. 다른 주소나 포트가 필요하면
-`BENCHMARK_PROXY_BIND`, `BENCHMARK_PROXY_PORT`를 변경합니다. 운영 배포
-워크플로는 `app/compose.production.yaml`과 같은 커밋의 이미지를 사용합니다.
+기본 호스트 바인드는 `0.0.0.0:3020`, `:3021`, `:3022`입니다. 변경하려면
+`BENCHMARK_PROXY_BIND`, `BENCHMARK_PROXY_PORT`, `BENCHMARK_JUICE_ROOT_PORT`,
+`BENCHMARK_RUBY_ROOT_PORT`를 설정합니다. 운영 서버의 호스트·클라우드
+방화벽에서도 원격 설치 컴퓨터가 사용할 포트를 허용해야 합니다. 배포 워크플로는
+Compose 파일과 같은 커밋의 이미지를 사용합니다. 로컬 개발용
+`app/compose.yaml`은 독립적인 `pipeline` 네트워크를 생성하므로, RUBY
+스택과 연결된 운영 배포 경로를 검증하려면 `app/compose.production.yaml`의
+외부 네트워크 구성을 사용해야 합니다.
 
-종료할 때는 다음 명령을 사용합니다. 데이터까지 지울 때만 `--volumes`를 추가합니다.
+종료할 때는 다음 명령을 사용합니다. 데이터까지 지울 때만 `--volumes`를
+추가합니다.
 
 ```bash
 docker compose --env-file app/.env.production -f app/compose.production.yaml down
 ```
 
-## 실험 격리
+## 실험 기록과 격리
 
-`web`만 80 포트 파이프라인 네트워크에 `ruby-web-target` 이름으로 연결됩니다.
-`juice-shop`과 `benchmark-proxy`는 그 네트워크에 연결되지 않습니다. API, 평가기,
-데이터 서비스는 호스트 포트를 열지 않습니다.
+다른 컴퓨터에 RUBY를 설치해 이 서버를 대상으로 삼을 때는 경로 프리픽스가 없는
+`http://HOST:3021` 또는 `http://HOST:3022`를 대상 URL로 지정합니다. 예를 들어
+Juice Shop과 RUBY Market을 둘 다 등록하려면 설치할 컴퓨터의 `TARGET_CHOICES`에
+`juice-shop=http://HOST:3021,ruby-shop=http://HOST:3022`를 설정합니다.
+`http://HOST:3020/juice-shop/` 같은 프리픽스 URL은 SPA의 리소스/API 경로가
+겹치므로 원격 Defense 대상 URL로 사용하지 않습니다. 원격 컴퓨터에서 LLM
+공격은 **그 컴퓨터의 Detection 공개 주소**로 보내야 그 컴퓨터의 탐지·방어
+대시보드에 요청이 기록됩니다. `:3021`과 `:3022`에 직접 보낸 요청은
+RUBY 파이프라인을 통과하지 않습니다. 원격 설치 컴퓨터의 보호 주소가 새로운
+브라우저 Origin이라면, RUBY Market에서 Origin을 검사하는 일반 역할 변경
+폼을 사용하기 전에 그 정확한 Origin을 운영 서버의 `RUBY_WEB_PUBLIC_ORIGINS`에
+등록해야 합니다. GitHub Actions 배포를 사용한다면 `benchmark-server` 환경의
+`RUBY_WEB_EXTRA_PUBLIC_ORIGINS` 변수에 쉼표로 구분해 등록하면 다음 배포의
+`.env`에 포함됩니다. LLM이 HTTP로 보내는 대부분의 API 요청과 별개인 브라우저
+폼 제약입니다.
 
-3020의 RUBY Market과 80에서 `ruby-web-target`을 선택했을 때의 RUBY Market은
-같은 `web` 및 데이터 서비스를 사용합니다. 두 경로를 동시에 시험하면 상태가 섞일
-수 있으므로 실행별 초기화나 격리 스택이 필요합니다. Detection의 누적 상태는
-대상 전환 시 별도로 초기화해야 합니다. `X-Experiment-Run-ID`는 실행 기록을
-구분하지만 상태를 초기화하지 않습니다.
+관리자 화면에서 보호 대상을 선택한 뒤 공격자는 **포트 80** 주소로 요청해야
+Detection과 Defense 대시보드에 기록됩니다. 두 대시보드의 요청 ID로 같은
+요청을 연결할 수 있습니다. 대상 전환 시 생성되는 실험 실행 ID와 설정 시각은
+관리자 화면에서 확인합니다. 기존 기록과 Detection의 누적 탐지 상태가
+전환만으로 초기화되지는 않으므로, 실험 비교 시 실행 ID와 시각을 확인하고
+필요한 초기화 절차를 별도로 진행합니다.
+
+`web`과 `juice-shop`만 RUBY 공유망에 연결됩니다. `benchmark-proxy`는
+`benchmark-edge`에만 연결되고 관리망에는 접근하지 않습니다. API, 평가기,
+데이터 서비스는 호스트 포트를 열지 않습니다. 3020·3021·3022의 취약한
+테스트 대상은 외부에 직접 공개됩니다. 3020·3022의 RUBY Market과 포트 80에
+선택된 RUBY Market은 같은 `web` 및 데이터 서비스를 사용하므로 동시 시험 시
+상태가 섞일 수 있습니다.

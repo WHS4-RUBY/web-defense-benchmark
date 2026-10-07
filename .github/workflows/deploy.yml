@@ -87,18 +87,45 @@ jobs:
           RUBY_EVALUATOR_TOKEN: ${{ secrets.RUBY_EVALUATOR_TOKEN }}
           RUBY_WEB_OPERATIONS_DIAGNOSTIC_KEY: ${{ secrets.RUBY_WEB_OPERATIONS_DIAGNOSTIC_KEY }}
           RUBY_WEB_PUBLIC_ORIGIN: ${{ secrets.RUBY_WEB_PUBLIC_ORIGIN }}
+          RUBY_WEB_EXTRA_PUBLIC_ORIGINS: ${{ vars.RUBY_WEB_EXTRA_PUBLIC_ORIGINS }}
         run: |
           umask 077
           image_prefix="ghcr.io/${GITHUB_REPOSITORY,,}"
+          # The production target URLs use the same public host at root paths.
+          # Keep their browser Origins alongside the protected port 80 Origin.
+          public_origins="$(python3 - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+
+          origin = urlsplit(os.environ["RUBY_WEB_PUBLIC_ORIGIN"])
+          if origin.scheme not in {"http", "https"} or not origin.hostname or origin.path or origin.query or origin.fragment:
+              raise SystemExit("RUBY_WEB_PUBLIC_ORIGIN must be a plain HTTP(S) origin")
+          host = origin.hostname
+          authority = f"[{host}]" if ":" in host else host
+          additional = [f"http://{authority}", f"http://{authority}:3020", f"http://{authority}:3022"]
+          for entry in os.environ.get("RUBY_WEB_EXTRA_PUBLIC_ORIGINS", "").split(","):
+              entry = entry.strip()
+              if not entry:
+                  continue
+              parsed = urlsplit(entry)
+              if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment or entry != f"{parsed.scheme}://{parsed.netloc}":
+                  raise SystemExit("RUBY_WEB_EXTRA_PUBLIC_ORIGINS must contain plain HTTP(S) origins")
+              additional.append(entry)
+          print(",".join(dict.fromkeys(additional)))
+          PY
+          )"
           cat > /tmp/production.env <<EOF
           RUBY_BENCHMARK_IMAGE_PREFIX=${image_prefix}
           RUBY_BENCHMARK_IMAGE_TAG=${IMAGE_TAG}
           RUBY_BENCHMARK_PIPELINE_NETWORK=ruby_ai-defense-net
           RUBY_WEB_PUBLIC_ORIGIN=${RUBY_WEB_PUBLIC_ORIGIN}
+          RUBY_WEB_PUBLIC_ORIGINS=${public_origins}
           RUBY_WEB_VULNERABILITY_MODULES=
           RUBY_WEB_TRIAL_ID=
           RUBY_WEB_PREPARATION_SEED=
           BENCHMARK_PROXY_PORT=3020
+          BENCHMARK_JUICE_ROOT_PORT=3021
+          BENCHMARK_RUBY_ROOT_PORT=3022
           BENCHMARK_PROXY_BIND=0.0.0.0
           JUICE_SHOP_NODE_ENV=unsafe
           POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -141,7 +168,11 @@ jobs:
           docker network inspect "\$network" >/dev/null 2>&1 || {
             echo "network '\$network' not found: start the proxy stack first" >&2; exit 1; }
           docker compose -f compose.production.yaml pull
-          docker compose -f compose.production.yaml up -d --remove-orphans
+          docker compose -f compose.production.yaml up -d --wait --wait-timeout 180 --remove-orphans
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:3020/healthz >/dev/null
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:3021/ >/dev/null
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:3022/ >/dev/null
+          test "\$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3020/__detection/api/target-selection)" = 404
           docker image prune -f
           REMOTE
 

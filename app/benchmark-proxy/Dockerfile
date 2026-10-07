@@ -3,4 +3,6 @@ RUN apk upgrade --no-cache \
     && apk del --no-cache curl libcurl \
     && rm -rf /var/cache/apk/*
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY selector.html /usr/share/nginx/html/index.html
+COPY selector.css selector.js /usr/share/nginx/html/
 RUN nginx -t

@@ -3011,12 +3011,12 @@ def create_app(
         admin: User = Depends(require_roles("admin")),
         session: Session = Depends(db_session),
     ) -> UserView:
-        origin = request.headers.get("origin", "").rstrip("/")
+        origin = request.headers.get("origin", "")
         vulnerable = (
             "cross-site-request-forgery.support-role-change"
             in settings.vulnerability_modules
         )
-        if origin != settings.public_origin and not vulnerable:
+        if not settings.allows_public_origin(origin) and not vulnerable:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "cross-origin role change is not allowed"
             )
@@ -3048,7 +3048,7 @@ def create_app(
         role: Annotated[str, Form(pattern="^(customer|seller_staff|support_staff|admin)$")],
         session: Session = Depends(db_session),
     ) -> UserView:
-        origin = request.headers.get("origin", "").rstrip("/")
+        origin = request.headers.get("origin", "")
         vulnerable = (
             "multi-stage.remembered-session-role-chain"
             in settings.vulnerability_modules
@@ -3073,7 +3073,7 @@ def create_app(
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "active session required")
         if admin.role != "admin":
             raise HTTPException(status.HTTP_403_FORBIDDEN, "role is not permitted")
-        if origin != settings.public_origin and not (
+        if not settings.allows_public_origin(origin) and not (
             vulnerable and used_remembered_session
         ):
             raise HTTPException(

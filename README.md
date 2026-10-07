@@ -31,7 +31,7 @@ AI 공격자 / 정상 사용자
 └─ OWASP Juice Shop: 기존 벤치마크 대상
 ```
 
-현재 정책 선택은 Detection 내부에서 수행합니다. 별도 Policy 서버를 거치지 않습니다. Juice Shop을 삭제하는 방식도 아닙니다. 두 [대상 선택 설정](docs/operations/04-server-target-selection.md)으로 Defense의 전달 주소를 바꾸며, 기본 대상은 Juice Shop입니다.
+현재 정책 선택은 Detection 내부에서 수행합니다. 별도 Policy 서버를 거치지 않습니다. Juice Shop을 삭제하는 방식도 아닙니다. [대상 선택 안내](docs/operations/04-server-target-selection.md)에 따라 SSH 터널로 관리자 화면에 접속해 보호 대상을 설정하고, 포트 3020의 직접 접속 경로로 원본 동작을 비교합니다. 다른 컴퓨터의 RUBY 설치에서는 경로 프리픽스 없는 포트 3021(Juice Shop) 또는 3022(RUBY Market)를 대상 URL로 사용합니다.
 
 원본 CVE 대상은 별도 실험용 컨테이너입니다. 아래 RUBY Market 스택을 시작한다고 원본 제품이나 AI 실험 실행기가 함께 시작되지는 않습니다.
 

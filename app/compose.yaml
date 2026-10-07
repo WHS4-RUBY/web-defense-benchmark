@@ -77,6 +77,7 @@ services:
       RUBY_WEB_VULNERABILITY_MODULES: ${RUBY_WEB_VULNERABILITY_MODULES:-}
       RUBY_WEB_MOCK_INTEGRATION_ORIGIN: http://mock-integration:8000
       RUBY_WEB_PUBLIC_ORIGIN: http://127.0.0.1:${RUBY_PUBLIC_PORT:-18080}
+      RUBY_WEB_PUBLIC_ORIGINS: ${RUBY_WEB_PUBLIC_ORIGINS:-}
       RUBY_WEB_REPORT_ROOT: /app/benchmark-files
       RUBY_WEB_OPERATIONS_DIAGNOSTIC_KEY: ${RUBY_WEB_OPERATIONS_DIAGNOSTIC_KEY:-ops_sk_live_9f4c27ab1e6d0538}
     depends_on:
@@ -134,10 +135,15 @@ services:
       api: {condition: service_healthy}
     ports:
       - "127.0.0.1:${RUBY_PUBLIC_PORT:-18080}:8080"
-    networks: [edge, attacker, benchmark-edge]
+    networks:
+      edge:
+      attacker:
+      benchmark-edge:
+      pipeline:
+        aliases: [ruby-web-target]
 
   # 벤치마크 대상 #1: OWASP Juice Shop (공용 이미지, digest 고정).
-  # 탐지/방어와 분리된 벤치마크 전용 진입점(benchmark-proxy)에서만 노출된다.
+  # 벤치마크 직접 접속과 RUBY Defense 의 보호 대상으로 모두 연결할 수 있다.
   juice-shop:
     image: bkimminich/juice-shop@sha256:73c53fbf442e8337b3ea3d98c7e8550308854701ebdfce4cc39768f36b75430e
     environment:
@@ -147,7 +153,10 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [benchmark-edge]
+    networks:
+      benchmark-edge:
+      pipeline:
+        aliases: [juice-shop-target]
 
   # 벤치마크 대상 전용 리버스 프록시.
   #   /juice-shop/ -> juice-shop:3000,  /ruby-shop/ -> web:8080
@@ -164,9 +173,14 @@ services:
       retries: 20
     ports:
       - "127.0.0.1:${BENCHMARK_PROXY_PORT:-3020}:8080"
+      - "127.0.0.1:${BENCHMARK_JUICE_ROOT_PORT:-3021}:8081"
+      - "127.0.0.1:${BENCHMARK_RUBY_ROOT_PORT:-3022}:8082"
     networks: [benchmark-edge]
 
 networks:
+  # 로컬 개발에서는 독립 네트워크를 만든다. RUBY 스택과 함께 실험할 때는
+  # app/compose.production.yaml 의 외부 pipeline 네트워크를 사용한다.
+  pipeline:
   edge:
   # 공격자 컨테이너만 붙는 망이다. nginx 만 여기 있고 api 는 없다.
   # 인터넷에서 이 서비스를 보는 것과 같은 시야를 강제한다.

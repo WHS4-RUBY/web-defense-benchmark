@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RUBY 실험 경로 안내</title>
+  <link rel="stylesheet" href="/selector.css">
+  <script src="/selector.js" defer></script>
+</head>
+<body>
+  <main class="layout">
+    <header class="page-header">
+      <p class="eyebrow">RUBY · Benchmark targets</p>
+      <h1>실험 경로 안내</h1>
+      <p>이 페이지는 두 대상을 직접 열어 원본 동작을 확인하는 곳입니다. 포트 80의 보호 대상은 SSH 터널로 접속하는 관리자 화면에서 확인하고 변경합니다.</p>
+    </header>
+
+    <section class="route-panel" aria-labelledby="protected-heading">
+      <p class="eyebrow">Protected pipeline</p>
+      <h2 id="protected-heading">탐지·방어를 거치는 테스트</h2>
+      <p>아래 명령으로 서버의 관리자 포트에 SSH 터널을 연 뒤 Juice Shop 또는 RUBY Market을 선택하세요. 이후 포트 80 주소로 공격과 정상 요청을 보내면 관리자 대시보드에서 기록을 확인할 수 있습니다.</p>
+      <code class="tunnel-command">ssh -L 8088:127.0.0.1:8088 root@158.247.253.127</code>
+      <div class="route-links">
+        <a id="admin-link" class="primary-link" href="http://127.0.0.1:8088/__detection/dashboard">SSH 터널로 관리자 화면 열기 ↗</a>
+        <a id="protected-link" class="secondary-link" href="#">포트 80 보호 경로 열기 ↗</a>
+      </div>
+    </section>
+
+    <section aria-labelledby="direct-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Direct baseline · Port 3020</p>
+          <h2 id="direct-heading">대상 직접 접속</h2>
+        </div>
+      </div>
+      <p class="section-intro">아래 링크는 탐지·방어 파이프라인을 우회합니다. 링크를 눌러도 포트 80의 보호 대상은 바뀌지 않습니다.</p>
+      <div class="target-grid">
+        <article class="target-card">
+          <span class="card-number">01</span>
+          <h3>OWASP Juice Shop</h3>
+          <p>Juice Shop의 원본 동작을 직접 확인합니다.</p>
+          <a href="/juice-shop/">Juice Shop 직접 열기 ↗</a>
+        </article>
+        <article class="target-card">
+          <span class="card-number">02</span>
+          <h3>RUBY Market</h3>
+          <p>RUBY Market의 원본 동작을 직접 확인합니다.</p>
+          <a href="/ruby-shop/">RUBY Market 직접 열기 ↗</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="route-note" aria-labelledby="route-heading">
+      <h2 id="route-heading">어느 주소로 공격해야 하나요?</h2>
+      <p><strong>포트 80:</strong> Detection → Defense → 관리자가 선택한 대상. 탐지·방어 기록이 남습니다.</p>
+      <p><strong>포트 3020:</strong> 대상에 직접 접속합니다. 이 경로의 요청은 RUBY 대시보드에 기록되지 않습니다.</p>
+      <p><strong>다른 컴퓨터의 RUBY 설치용 대상 URL:</strong> <a id="juice-root-link" href="#">Juice Shop 루트</a> · <a id="ruby-root-link" href="#">RUBY Market 루트</a>. 이 주소를 대상으로 등록한 뒤, 공격은 설치한 컴퓨터의 보호 주소로 보내세요.</p>
+    </section>
+  </main>
+</body>
+</html>
