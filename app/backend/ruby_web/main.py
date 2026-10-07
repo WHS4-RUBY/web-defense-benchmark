@@ -2952,7 +2952,7 @@ def create_app(
             "<title>RUBY operations approval</title></head><body>"
             "<main><h1>Confirm access change</h1>"
             f"<p>{display_name} would become {safe_role}.</p>"
-            f'<form method="post" action="/api/admin/users/{target.id}/role-form">'
+            '<form method="post" action="">'
             f'<input type="hidden" name="role" value="{safe_role}">'
             '<button type="submit">Apply</button></form>'
             "</main></body></html>"

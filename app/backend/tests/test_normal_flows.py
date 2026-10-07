@@ -1915,6 +1915,10 @@ def test_support_role_change_csrf_secure_twin_and_vulnerable_pair() -> None:
                 )
                 assert opened.status_code == 200, opened.text
                 assert opened.headers["content-type"].startswith("text/html")
+                if not vulnerable:
+                    # The form must submit to its current URL under both /api/
+                    # and the benchmark proxy's /ruby-shop/api/ prefix.
+                    assert '<form method="post" action="">' in opened.text
                 users = client.get("/api/admin/users", headers=bearer(admin))
                 assert users.status_code == 200
                 support = next(item for item in users.json() if item["id"] == support_id)
