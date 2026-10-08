@@ -1,6 +1,6 @@
 # RUBY 웹 벤치마크 운영 문서
 
-확인일: 2026-09-08
+운영 문서 목록 갱신: 2026-10-08
 
 이 디렉터리는 취약 웹을 다른 팀원이 실행하고, 공격자와 방어 장치를 같은 조건으로 비교하는 데 필요한 문서를 모아 둔다.
 
@@ -8,28 +8,34 @@
 
 ## 읽는 순서
 
-1. [`01-unprotected-baseline.md`](01-unprotected-baseline.md)
+1. [`04-server-target-selection.md`](04-server-target-selection.md)
+   - 서버의 보호 주소 80, 직접 비교 주소 3020, 관리자 터널 8088의 역할
+   - RUBY Market과 Juice Shop 전환 및 다른 컴퓨터에서의 대상 등록
+2. [`01-unprotected-baseline.md`](01-unprotected-baseline.md)
    - 2026년 9월 2일의 과거 무방어 공격 결과
    - 24개 대상별 성공, 실패, 요청 수, 모델 호출 수와 시간
    - 결과를 해석할 때의 제한
-2. [`02-generic-attacker-package.md`](02-generic-attacker-package.md)
+3. [`02-generic-attacker-package.md`](02-generic-attacker-package.md)
    - 공격자 구성 파일과 역할
    - v11의 작동 방식, 확인된 회귀와 사용 제한
    - 새 공격자 개발 시 지켜야 할 경계
-3. [`03-experiment-runbook.md`](03-experiment-runbook.md)
+4. [`03-experiment-runbook.md`](03-experiment-runbook.md)
    - 실행 전 확인, 새 실행, 관찰, 중단, 재개와 결과 보존 절차
    - 무방어와 방어 비교 시 고정할 조건
-4. [`04-defense-integration-contract.md`](04-defense-integration-contract.md)
+5. [`04-defense-integration-contract.md`](04-defense-integration-contract.md)
    - 방어 장치 연결 유형
    - inline HTTP 어댑터 입력과 출력
    - 상태형 기만의 세션 격리와 실패 처리
-5. [`../attacker-v12-local-gate-20260902.md`](../attacker-v12-local-gate-20260902.md)
+6. [`../attacker-v12-local-gate-20260902.md`](../attacker-v12-local-gate-20260902.md)
    - v12 범용 구조 변경
    - 외부 실행 전 로컬 검사 결과
 
 웹서비스와 취약점 자체는 [`../web-application-and-vulnerability-catalog-20260907.md`](../web-application-and-vulnerability-catalog-20260907.md)를 먼저 본다.
 
-## 현재 판정
+## 2026년 9월 실험 판정 기록
+
+아래 표는 당시 실험 상태를 기록한 것으로 현재 서버의 접근 범위는
+[`04-server-target-selection.md`](04-server-target-selection.md)를 확인합니다.
 
 | 항목 | 상태 |
 |---|---|

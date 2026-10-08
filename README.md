@@ -38,7 +38,7 @@ AI 공격자 / 정상 사용자
 ## 웹 내부 구조
 
 ```text
-RUBY Market 운영 스택 ── 총 8개 서비스
+RUBY Market 업무 스택 ── 8개 서비스 (대상 선택용 Juice Shop·벤치마크 프록시 별도)
 │
 ├─ ① web: 화면과 웹 요청 입구
 │   ├─ 장터             상품 조회와 검색
@@ -129,7 +129,7 @@ AI 토큰 사용량은 웹 서버가 알아내는 값이 아닙니다. 실행기
 
 제외한 5개는 코드와 재현 자료를 보존하며 재현 확인용 전환도 유지합니다. 본 실험 실행과 방어 효과 집계에서는 제외합니다. **취약판은 본 실험에 사용하고, 안전판과 원본 제품 수정판은 재현 대조군으로 사용합니다.** 전체 34개 목록과 실제 본 실험 29개를 혼동하지 않습니다.
 
-## 격리 구조와 남은 문제
+## 격리 구조와 운영 경계
 
 ```text
 팀 공용 연결망
@@ -148,9 +148,9 @@ AI 토큰 사용량은 웹 서버가 알아내는 값이 아닙니다. 실행기
 └─ 벤치마크 관리 UI와 실험 실행기
 ```
 
-PostgreSQL 서버는 업무 처리와 판정에 함께 쓰지만 DB 계정과 권한을 구분합니다. 운영용 Compose는 자체 웹 서비스에 직접 호스트 공개 포트를 열지 않습니다. 로컬 개발용 Compose의 loopback 포트와는 다른 구성입니다.
+PostgreSQL 서버는 업무 처리와 판정에 함께 쓰지만 DB 계정과 권한을 구분합니다. 운영용 Compose는 `web` 컨테이너의 호스트 포트를 직접 열지 않습니다. 대신 별도 벤치마크 프록시가 3020의 `/ruby-shop/`·`/juice-shop/` 및 3021·3022 루트 URL을 제공합니다. 이 직접 경로는 탐지·방어를 거치지 않으며, 보호 대상 요청은 포트 80으로 보내야 기록됩니다. 로컬 개발용 Compose는 loopback 포트를 사용합니다.
 
-**남은 문제:** 로컬 연결 검사에서 팀 Detection의 운영용 점수 API가 실험 요청 진입점에서 인증 없이 응답했습니다. 우리 관리 UI와 판정기의 분리만으로 이 문제까지 해결되지는 않습니다. Detection 운영 경로의 접근 제한을 별도로 확인하고 수정해야 하며, 실제 팀 서버 앞단의 노출 여부는 이번 검사에서 확인하지 않았습니다. [확인한 결과와 제한사항](docs/team-pipeline-runtime-verification-20260923.md)을 참고하세요.
+2026-09-23의 로컬 연결 검사에서는 당시 Detection 운영 API의 접근 경계 문제가 관찰됐습니다. 이는 그날의 검사 결과이며 현재 서버 노출 상태의 설명은 아닙니다. 이후 운영 구성은 관리자 경로를 서버 loopback 포트 8088로 분리하고, 3020의 관리 경로는 404로 응답하도록 설정했습니다. 현재 서버의 주소와 접근 범위, SSH 터널 절차는 [서버 대상 선택 안내](docs/operations/04-server-target-selection.md)를 확인하세요. 과거 관찰과 검증 범위는 [2026-09-23 실행 기록](docs/team-pipeline-runtime-verification-20260923.md)에 보존합니다.
 
 ## 현재 검증 범위
 
@@ -161,9 +161,10 @@ PostgreSQL 서버는 업무 처리와 판정에 함께 쓰지만 DB 계정과 �
 - 2026-09-10 멘토 피드백에 따른 실제 재검증, SHA-256 용도와 남은 문제는 [`docs/mentor-feedback-verification-20260910.md`](docs/mentor-feedback-verification-20260910.md)에 쉬운 말로 정리했습니다.
 - 팀 PR #17과 #18 이후의 `Detection -> Defense -> Target` 연결, Client Flow 상태 초기화와 XSS 및 CSRF 신호의 해석은 [`docs/detection-integration-pr17-pr18-20260922.md`](docs/detection-integration-pr17-pr18-20260922.md)에 정리했습니다. 이 변경은 2026-09-17 본 실험 제외 목록을 자동으로 바꾸지 않습니다.
 
-## 현재 상태
+## 검증 기록과 운영 상태
 
-- 2026-09-23에 최신 팀 Detection, Defense와 자체 웹의 실제 로컬 연결을 확인했습니다. 정상 요청 전달과 지연 지시는 작동했습니다. 변경사항은 검토용 PR로 제출하되, Detection 운영 API의 접근 경계가 해결되기 전에는 공격자에게 공개하는 실험 환경을 준비 완료로 판단하지 않습니다. 실제 공격 식별 정확도나 방어 효과를 확인한 결과는 아닙니다. [실행 기록과 남은 문제](docs/team-pipeline-runtime-verification-20260923.md)를 확인하세요.
+- 2026-09-23 로컬 검사에서 Detection → Defense → 자체 웹 전달과 지연 지시가 동작했습니다. 당시 운영 API 접근 경계는 미해결이었고, 이 결과만으로 공격 식별 정확도나 방어 효과를 입증하지 않았습니다. [당시 실행 기록](docs/team-pipeline-runtime-verification-20260923.md)을 확인하세요.
+- 서버 운영 구성의 보호 주소는 포트 80, 직접 비교 주소는 포트 3020, 관리자 화면은 SSH 터널로 여는 8088입니다. 대상 선택과 접근 범위는 [서버 대상 선택 안내](docs/operations/04-server-target-selection.md)에 따릅니다.
 
 - 취약점 웹의 정상 모드, 선택형 취약 모드와 비공개 판정 구조는 로컬에서 실행 검증했습니다.
 - 34개 대상의 안전판과 취약판 전체 쌍, 원본 대상 격리와 전체 회귀를 묶은 로컬 릴리스 게이트가 통과했습니다. 근거는 [`docs/release-readiness-20260908.md`](docs/release-readiness-20260908.md)에 있습니다.
@@ -178,7 +179,7 @@ PostgreSQL 서버는 업무 처리와 판정에 함께 쓰지만 DB 계정과 �
 
 ## 코드 검토 시작점
 
-- [`docs/codebase-guide.md`](docs/codebase-guide.md)는 웹, 평가기, 공격 실행기, 방어 연결, 설정과 증거의 책임을 실제 진입점 기준으로 설명합니다.
+- [`docs/codebase-guide.md`](docs/codebase-guide.md)는 `a3b7d67` 시점의 웹, 평가기, 공격 실행기, 방어 연결, 설정과 증거의 책임을 설명하는 코드 스냅샷입니다. 현재 서버 대상 경로는 [운영 안내](docs/operations/04-server-target-selection.md)를 확인하세요.
 - [`docs/mentor-feedback-verification-20260910.md`](docs/mentor-feedback-verification-20260910.md)는 XSS, DOM 기반 공격, SHA-256, 원본 CVE와 실행 격리의 지원 범위와 실제 재검증 결과를 설명합니다.
 - [`docs/mentor-feedback-action-status-20260911.md`](docs/mentor-feedback-action-status-20260911.md)는 공격 성공 판정, 공격 요청 식별과 실행 차단을 구분하고 XSS 및 CSRF의 방어 실험 편입 조건을 기록합니다.
 - [`docs/request-identification-decision-20260911.md`](docs/request-identification-decision-20260911.md)는 실제 RUBY 웹에 연결한 XSS 및 CSRF 요청 분류 시험과 미채택 이유를 기록합니다.
