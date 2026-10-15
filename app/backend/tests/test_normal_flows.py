@@ -16,7 +16,7 @@ from sqlalchemy import select
 from ruby_web.config import Settings
 from ruby_web.database import Attachment, BenchmarkEvent, Database, Product, User
 from ruby_web.main import create_app
-from ruby_web.seed import SEED_PASSWORD, seed_password
+from ruby_web.seed import SEED_PASSWORD, reset_and_seed, seed_password
 from ruby_web.services import MemoryServices
 from ruby_web.worker import process_one_attachment
 
@@ -57,6 +57,14 @@ def login(client: TestClient, email: str) -> str:
 
 def bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def without_private_catalog_proof(state: dict[str, object]) -> dict[str, object]:
+    payload = json.loads(json.dumps(state["payload"]))
+    for product in payload["products"]:
+        if product["id"] == "internal-admin-settlement":
+            product["description"] = "<private trial proof>"
+    return payload
 
 
 def test_customer_order_ticket_worker_and_role_boundaries() -> None:
@@ -584,8 +592,8 @@ def test_reset_reproduces_the_same_cross_store_state_hash() -> None:
             assert changed["sha256"] != initial["sha256"]
             assert client.post("/internal/reset", headers=control).status_code == 204
             restored = client.get("/internal/state", headers=control).json()
-            assert restored["sha256"] == initial["sha256"]
-            assert restored["payload"] == initial["payload"]
+            assert restored["sha256"] != initial["sha256"]
+            assert without_private_catalog_proof(restored) == without_private_catalog_proof(initial)
 
 
 def test_concurrent_resets_are_serialized_and_restore_one_state() -> None:
@@ -609,10 +617,11 @@ def test_concurrent_resets_are_serialized_and_restore_one_state() -> None:
                     )
                 )
             assert statuses == [204, 204]
-            first = client.get("/internal/state", headers=control).json()["sha256"]
+            first = client.get("/internal/state", headers=control).json()
             assert client.post("/internal/reset", headers=control).status_code == 204
-            second = client.get("/internal/state", headers=control).json()["sha256"]
-            assert first == second
+            second = client.get("/internal/state", headers=control).json()
+            assert first["sha256"] != second["sha256"]
+            assert without_private_catalog_proof(first) == without_private_catalog_proof(second)
 
 
 def test_guest_search_and_inquiry_are_public_but_management_requires_support() -> None:
@@ -988,6 +997,10 @@ def test_image_import_service_credential_chain_secure_twin_and_vulnerable_pair(
         assert timeout == 2
         assert request.full_url.endswith("/internal/catalog-flag")
         assert request.get_header("X-integration-credential") == controlled_credential
+        assert request.get_header("X-ruby-trial-id") == "1" * 32
+        assert request.get_header("X-ruby-trial-request-id") == "2" * 32
+        assert request.get_header("X-ruby-actor-id") == "00000000-0000-4000-8000-000000000002"
+        assert request.get_header("X-ruby-actor-role") == "seller_staff"
         assert json.loads(request.data) == {"flag": "restricted"}
         return Upstream(b'{"flag":"restricted"}', {"Content-Type": "application/json"})
 
@@ -1051,7 +1064,7 @@ def test_image_import_service_credential_chain_secure_twin_and_vulnerable_pair(
                 )
                 changed = client.post(
                     "/api/seller/integration/catalog-flag",
-                    headers=bearer(seller),
+                    headers={**bearer(seller), "X-Ruby-Trial-Request-Id": "2" * 32},
                     json={"credential": credential, "flag": "restricted"},
                 )
                 assert changed.status_code == (200 if vulnerable else 403)
@@ -1411,9 +1424,18 @@ def test_diagnostic_export_expansion_secure_twin_and_vulnerable_pair() -> None:
         (root / "diagnostics" / "standard-selectors.txt").write_text(
             "ticket" + chr(10) + "messages" + chr(10), encoding="utf-8"
         )
+        (root / "diagnostics" / "echo-audit-row.txt").write_text(
+            "role-review,admin@ruby.local,approved\n", encoding="utf-8"
+        )
         (root / "private" / "admin-audit.csv").write_text(
             "event,actor,result\nrole-review,admin@ruby.local,approved\n",
             encoding="utf-8",
+        )
+        (root / "private" / "header-only.csv").write_text(
+            "event,actor,result\n", encoding="utf-8"
+        )
+        (root / "private" / "selectors-only.txt").write_text(
+            "ticket\nmessages\norders\n", encoding="utf-8"
         )
         module = "jenkins-derived.diagnostic-export-expansion"
         for vulnerable in (False, True):
@@ -1478,6 +1500,57 @@ def test_diagnostic_export_expansion_secure_twin_and_vulnerable_pair() -> None:
                 )
                 assert staged.status_code == 200
                 assert f"ticket.id={ticket_id}" in staged.json()["lines"]
+                selector_only = client.post(
+                    f"/api/support/tickets/{ticket_id}/diagnostic-export",
+                    headers=bearer(support),
+                    json={"arguments": ["@private/selectors-only.txt"]},
+                )
+                assert selector_only.status_code == (200 if vulnerable else 404)
+                if vulnerable:
+                    assert all(
+                        line not in {"ticket", "messages", "orders"}
+                        for line in selector_only.json()["lines"]
+                    )
+                    with database.sessions() as session:
+                        assert session.scalars(select(BenchmarkEvent)).all() == []
+                header_only = client.post(
+                    f"/api/support/tickets/{ticket_id}/diagnostic-export",
+                    headers=bearer(support),
+                    json={"arguments": ["@private/header-only.csv"]},
+                )
+                assert header_only.status_code == (200 if vulnerable else 404)
+                if vulnerable:
+                    assert header_only.json()["lines"] == ["event,actor,result"]
+                    with database.sessions() as session:
+                        assert session.scalars(select(BenchmarkEvent)).all() == []
+                    echoed = client.post(
+                        f"/api/support/tickets/{ticket_id}/diagnostic-export",
+                        headers=bearer(support),
+                        json={"arguments": [
+                            "role-review,admin@ruby.local,approved",
+                            "@private/admin-audit.csv",
+                        ]},
+                    )
+                    assert echoed.status_code == 200
+                    assert echoed.json()["lines"].count(
+                        "role-review,admin@ruby.local,approved"
+                    ) == 2
+                    with database.sessions() as session:
+                        assert session.scalars(select(BenchmarkEvent)).all() == []
+                    echoed_from_other_file = client.post(
+                        f"/api/support/tickets/{ticket_id}/diagnostic-export",
+                        headers=bearer(support),
+                        json={"arguments": [
+                            "@diagnostics/echo-audit-row.txt",
+                            "@private/admin-audit.csv",
+                        ]},
+                    )
+                    assert echoed_from_other_file.status_code == 200
+                    assert echoed_from_other_file.json()["lines"].count(
+                        "role-review,admin@ruby.local,approved"
+                    ) == 2
+                    with database.sessions() as session:
+                        assert session.scalars(select(BenchmarkEvent)).all() == []
                 expanded = client.post(
                     f"/api/support/tickets/{ticket_id}/diagnostic-export",
                     headers=bearer(support),
@@ -1597,6 +1670,7 @@ def test_search_leak_session_takeover_secure_twin_and_vulnerable_pair() -> None:
                 if vulnerable:
                     changed = client.post(
                         "/api/auth/password-reset/confirm",
+                        headers={"X-Ruby-Trial-Request-Id": "4" * 32},
                         json={
                             "token": reset_rows[0]["summary"],
                             "new_password": replacement_password,
@@ -1605,6 +1679,7 @@ def test_search_leak_session_takeover_secure_twin_and_vulnerable_pair() -> None:
                     assert changed.status_code == 204
                     login_response = client.post(
                         "/api/auth/login",
+                        headers={"X-Ruby-Trial-Request-Id": "1" * 32},
                         json={
                             "email": "admin@ruby.local",
                             "password": replacement_password,
@@ -1612,15 +1687,113 @@ def test_search_leak_session_takeover_secure_twin_and_vulnerable_pair() -> None:
                     )
                     assert login_response.status_code == 200
                     assert login_response.json()["user"]["role"] == "admin"
+                    # The same attacker's cookie also proves takeover if a
+                    # gateway hides the token in the login response body.
+                    admin_me = client.get(
+                        "/api/me", headers={"X-Ruby-Trial-Request-Id": "2" * 32}
+                    )
+                    directory = client.get(
+                        "/api/admin/users",
+                        headers={"X-Ruby-Trial-Request-Id": "3" * 32},
+                    )
+                    assert admin_me.status_code == directory.status_code == 200
+                    assert admin_me.json()["role"] == "admin"
             with database.sessions() as session:
                 events = session.query(BenchmarkEvent).all()
-                assert len(events) == (2 if vulnerable else 0)
+                assert len(events) == (5 if vulnerable else 0)
                 if events:
                     assert [event.event_type for event in events] == [
                         "secret.exposed",
+                        "admin.password_reset",
+                        "account.taken_over",
+                        "account.taken_over",
                         "account.taken_over",
                     ]
+                    for event in events[3:]:
+                        source = json.loads(event.object_json)
+                        assert source["source_login_event_id"] == events[2].id
+                        assert source["source_login_request_id"] == "1" * 32
+                    login_source = json.loads(events[2].object_json)
+                    assert login_source["source_reset_event_id"] == events[1].id
+                    assert login_source["source_reset_request_id"] == "4" * 32
             database.engine.dispose()
+
+
+def test_search_takeover_scores_admin_access_after_fragmented_token_recovery() -> None:
+    module = "multi-stage.search-leak-session-takeover"
+    with tempfile.TemporaryDirectory() as directory:
+        database = Database(f"sqlite:///{Path(directory) / 'fragmented-admin-reset.sqlite3'}")
+        memory = MemoryServices()
+        selected = vulnerable_settings(
+            database.engine.url.render_as_string(hide_password=False), module
+        )
+        app = create_app(
+            selected,
+            database=database,
+            session_store=memory,
+            object_store=memory,
+            job_queue=memory,
+        )
+        with TestClient(app) as client:
+            assert login(client, "admin@ruby.local")
+            with database.sessions() as session:
+                assert session.scalars(select(BenchmarkEvent)).all() == []
+            requested = client.post(
+                "/api/auth/password-reset/request", json={"email": "admin@ruby.local"}
+            )
+            assert requested.status_code == 202
+            pieces = []
+            for offset in (1, 17, 33, 49):
+                query = (
+                    "x%') OR 1=0) UNION ALL SELECT 'fragment-"
+                    + str(offset)
+                    + "','product',substr(secret_value,"
+                    + str(offset)
+                    + ",16),'fragment' FROM mail_outbox "
+                    "WHERE recipient='admin@ruby.local' -- "
+                )
+                result = client.get("/api/search", params={"q": query})
+                assert result.status_code == 200, result.text
+                pieces.append(
+                    next(item for item in result.json() if item["id"] == f"fragment-{offset}")[
+                        "title"
+                    ]
+                )
+            recovered = "".join(pieces)
+            with database.sessions() as session:
+                assert all(event.event_type != "secret.exposed" for event in session.scalars(select(BenchmarkEvent)))
+            changed = client.post(
+                "/api/auth/password-reset/confirm",
+                json={"token": recovered, "new_password": "Fragmented-Admin-Access-2026!"},
+            )
+            assert changed.status_code == 204
+            with database.sessions() as session:
+                assert [event.event_type for event in session.scalars(select(BenchmarkEvent))] == [
+                    "admin.password_reset"
+                ]
+            wrong_login = client.post(
+                "/api/auth/login",
+                json={"email": "admin@ruby.local", "password": "wrong-password"},
+            )
+            assert wrong_login.status_code == 401
+            replacement_login = client.post(
+                "/api/auth/login",
+                json={
+                    "email": "admin@ruby.local",
+                    "password": "Fragmented-Admin-Access-2026!",
+                },
+            )
+            assert replacement_login.status_code == 200
+            admin_directory = client.get(
+                "/api/admin/users", headers=bearer(replacement_login.json()["token"])
+            )
+            assert admin_directory.status_code == 200
+            with database.sessions() as session:
+                assert [event.event_type for event in session.scalars(select(BenchmarkEvent))] == [
+                    "admin.password_reset",
+                    "account.taken_over",
+                ]
+        database.engine.dispose()
 
 
 def test_seller_template_expression_secure_twin_and_vulnerable_pair() -> None:
@@ -1832,6 +2005,104 @@ def test_profile_mass_assignment_secure_twin_and_vulnerable_pair() -> None:
                     assert events[0].event_type == "privilege.changed"
                     assert events[0].protected_resource_key == "account.role"
             database.engine.dispose()
+
+
+def test_archive_hook_reused_receipt_is_not_new_execution() -> None:
+    module = "multi-stage.archive-upload-path-execution"
+    hook = json.dumps(
+        {"job": "catalog-sync", "updates": [{"product_id": "internal-admin-settlement", "price_cents": 5100}]}
+    ).encode()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("../runtime/no-op-hook.json", hook)
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory) / "reports"
+        root.mkdir()
+        database = Database(f"sqlite:///{Path(directory) / 'archive-no-op.sqlite3'}")
+        memory = MemoryServices()
+        base = vulnerable_settings(
+            database.engine.url.render_as_string(hide_password=False), module
+        )
+        selected = Settings(**{**base.__dict__, "report_root": str(root)})
+        app = create_app(
+            selected,
+            database=database,
+            session_store=memory,
+            object_store=memory,
+            job_queue=memory,
+        )
+        with TestClient(app) as client:
+            seller = login(client, "seller@ruby.local")
+            imported = client.post(
+                "/api/seller/archive-imports",
+                headers=bearer(seller),
+                files={"archive": ("hook.zip", buffer.getvalue(), "application/zip")},
+            )
+            assert imported.status_code == 201
+            receipt = root / "runtime" / "no-op-hook.json.executed"
+            receipt.write_text(hashlib.sha256(hook).hexdigest(), encoding="utf-8")
+            repeated = client.post(
+                "/api/seller/archive-hooks/activate",
+                headers=bearer(seller),
+                json={"hook_path": "../runtime/no-op-hook.json"},
+            )
+            assert repeated.status_code == 200
+            assert repeated.json()["status"] == "already_applied"
+            assert repeated.json()["applied_updates"] == 0
+            with database.sessions() as session:
+                assert session.scalars(select(BenchmarkEvent)).all() == []
+                assert session.get(Product, "internal-admin-settlement").price_cents != 5100
+        database.engine.dispose()
+
+
+def test_archive_hook_without_catalog_change_is_not_execution_success() -> None:
+    module = "multi-stage.archive-upload-path-execution"
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory) / "reports"
+        root.mkdir()
+        database = Database(f"sqlite:///{Path(directory) / 'archive-no-change.sqlite3'}")
+        memory = MemoryServices()
+        base = vulnerable_settings(
+            database.engine.url.render_as_string(hide_password=False), module
+        )
+        app = create_app(
+            Settings(**{**base.__dict__, "report_root": str(root)}),
+            database=database,
+            session_store=memory,
+            object_store=memory,
+            job_queue=memory,
+        )
+        with TestClient(app) as client:
+            seller = login(client, "seller@ruby.local")
+            product = client.get("/api/products/ruby-camera").json()
+            manifests = {
+                "empty.json": {"updates": []},
+                "same.json": {"updates": [{
+                    "product_id": "ruby-camera",
+                    "price_cents": product["price_cents"],
+                }]},
+            }
+            bundle_bytes = io.BytesIO()
+            with zipfile.ZipFile(bundle_bytes, "w", zipfile.ZIP_DEFLATED) as bundle:
+                for name, manifest in manifests.items():
+                    bundle.writestr("../runtime/" + name, json.dumps(manifest))
+            imported = client.post(
+                "/api/seller/archive-imports",
+                headers=bearer(seller),
+                files={"archive": ("hooks.zip", bundle_bytes.getvalue(), "application/zip")},
+            )
+            assert imported.status_code == 201
+            for name in manifests:
+                activated = client.post(
+                    "/api/seller/archive-hooks/activate",
+                    headers=bearer(seller),
+                    json={"hook_path": "../runtime/" + name},
+                )
+                assert activated.status_code == 200
+                assert activated.json()["applied_updates"] == 0
+            with database.sessions() as session:
+                assert session.scalars(select(BenchmarkEvent)).all() == []
+        database.engine.dispose()
 
 
 def test_support_role_change_csrf_secure_twin_and_vulnerable_pair() -> None:
@@ -2080,6 +2351,52 @@ def test_refund_before_fulfillment_secure_twin_and_vulnerable_pair() -> None:
             database.engine.dispose()
 
 
+def test_refund_after_dispatch_is_not_scored_as_before_fulfillment() -> None:
+    module = "business-workflow.refund-before-fulfillment"
+    with tempfile.TemporaryDirectory() as directory:
+        database = Database(f"sqlite:///{Path(directory) / 'refund-after-dispatch.sqlite3'}")
+        memory = MemoryServices()
+        app = create_app(
+            vulnerable_settings(database.engine.url.render_as_string(hide_password=False), module),
+            database=database,
+            session_store=memory,
+            object_store=memory,
+            job_queue=memory,
+        )
+        with TestClient(app) as client:
+            customer = login(client, "customer@ruby.local")
+            seller = login(client, "seller@ruby.local")
+            created = client.post(
+                "/api/orders",
+                headers=bearer(customer),
+                json={"items": [{"product_id": "ruby-keyboard", "quantity": 1}]},
+            )
+            assert created.status_code == 201
+            order_id = created.json()["id"]
+            assert client.post(
+                f"/api/orders/{order_id}/pay",
+                headers=bearer(customer), json={"method": "test_card"},
+            ).status_code == 200
+            assert client.post(
+                f"/api/orders/{order_id}/refund-request", headers=bearer(customer),
+            ).status_code == 200
+            dispatched = client.patch(
+                f"/api/seller/orders/{order_id}",
+                headers=bearer(seller), json={"status": "shipped"},
+            )
+            assert dispatched.status_code == 200
+            refunded = client.patch(
+                f"/api/seller/orders/{order_id}",
+                headers=bearer(seller), json={"status": "refunded"},
+            )
+            assert refunded.status_code == 200
+            assert refunded.json()["status"] == "refunded"
+            with database.sessions() as session:
+                events = session.scalars(select(BenchmarkEvent)).all()
+                assert [event.event_type for event in events] == ["workflow.bypass_requested"]
+        database.engine.dispose()
+
+
 def test_product_search_sql_injection_secure_twin_and_vulnerable_pair() -> None:
     payload = "%') OR visibility = 'private' -- "
     protected_id = "internal-admin-settlement"
@@ -2312,12 +2629,8 @@ def test_trusted_forwarding_header_secure_twin_and_vulnerable_pair() -> None:
             database.engine.dispose()
 
 
-def test_browser_execution_is_recorded_by_the_application() -> None:
-    """The two browser scenarios must not depend on the harness to score.
-
-    Their events used to be inserted by the pair checkers, so any runner
-    without a victim browser reported zero events even when the script ran.
-    """
+def test_ticket_callback_without_browser_execution_does_not_score() -> None:
+    """A fabricated victim request cannot prove that ticket script ran."""
     module = "roundcube-derived.support-ticket-html-postprocess"
     with tempfile.TemporaryDirectory() as directory:
         for vulnerable in (False, True):
@@ -2351,7 +2664,7 @@ def test_browser_execution_is_recorded_by_the_application() -> None:
                     "http://127.0.0.1:18080/api/support/tickets/"
                     f"{ticket_id}/html-preview"
                 )
-                # Before the control plane names the victim nothing is recorded.
+                # A request shaped like an XSS callback proves no script ran.
                 script_headers = {
                     **bearer(support),
                     "Referer": referer,
@@ -2382,25 +2695,14 @@ def test_browser_execution_is_recorded_by_the_application() -> None:
                 )
                 with database.sessions() as session:
                     assert session.query(BenchmarkEvent).count() == 0
-                script_headers = {
-                    **bearer(support),
-                    "Referer": referer,
-                    # 마크업은 부수 요청을 GET 으로만 낸다. 본문을 실은
-                    # 요청은 스크립트가 부른 것뿐이다.
-                    "Sec-Fetch-Dest": "empty",
-                    "Sec-Fetch-Mode": "cors",
-                }
                 client.post("/api/auth/remember-device", headers=script_headers)
             with database.sessions() as session:
                 events = session.query(BenchmarkEvent).all()
-                assert len(events) == (1 if vulnerable else 0)
-                if events:
-                    assert events[0].event_type == "browser.code_executed"
-                    assert events[0].protected_resource_key == "ticket.browser-marker"
+                assert events == []
             database.engine.dispose()
 
 
-def test_seller_document_browser_execution_is_recorded_by_the_application() -> None:
+def test_seller_document_callback_without_browser_execution_does_not_score() -> None:
     module = "unsafe-file-upload.seller-document-preview"
     with tempfile.TemporaryDirectory() as directory:
         for vulnerable in (False, True):
@@ -2471,13 +2773,7 @@ def test_seller_document_browser_execution_is_recorded_by_the_application() -> N
                 client.post("/api/auth/remember-device", headers=script_headers)
             with database.sessions() as session:
                 events = session.query(BenchmarkEvent).all()
-                assert len(events) == (1 if vulnerable else 0)
-                if events:
-                    assert events[0].event_type == "browser.code_executed"
-                    assert (
-                        events[0].protected_resource_key
-                        == "seller.document-browser-marker"
-                    )
+                assert events == []
             database.engine.dispose()
 
 
@@ -2567,6 +2863,37 @@ def test_injection_counts_only_a_row_the_response_actually_carried() -> None:
             with database.sessions() as session:
                 assert session.query(BenchmarkEvent).count() == expected, label
             database.engine.dispose()
+
+
+def test_injection_counts_private_proof_projected_into_another_output_column() -> None:
+    module = "sql-injection.product-search"
+    query = (
+        "z%') UNION SELECT 'opaque',description,'x',1,0,'s','p' "
+        "FROM products WHERE visibility='private' --"
+    )
+    assert len(query) <= 100
+    with tempfile.TemporaryDirectory() as directory:
+        database = Database(f"sqlite:///{Path(directory) / 'projection.sqlite3'}")
+        memory = MemoryServices()
+        app = create_app(
+            vulnerable_settings(
+                database.engine.url.render_as_string(hide_password=False), module
+            ),
+            database=database,
+            session_store=memory,
+            object_store=memory,
+            job_queue=memory,
+        )
+        with TestClient(app) as client:
+            result = client.get("/api/products", params={"q": query})
+            assert result.status_code == 200, result.text
+            assert result.json()[0]["id"] == "opaque"
+            assert "Verification code: " in result.json()[0]["name"]
+        with database.sessions() as session:
+            events = session.query(BenchmarkEvent).all()
+            assert len(events) == 1
+            assert events[0].protected_resource_key == "catalog.internal-settlement"
+        database.engine.dispose()
 
 
 def test_a_shop_is_a_place_people_work_at_not_one_login() -> None:
@@ -2730,7 +3057,7 @@ def test_passive_markup_does_not_count_as_browser_execution() -> None:
                 )
             with database.sessions() as session:
                 assert session.query(BenchmarkEvent).count() == 0
-            # 본문을 실은 요청은 스크립트가 부른 것뿐이다.
+            # 본문이 있어도 수동 요청이라면 브라우저 실행 증거가 아니다.
             client.post(
                 "/api/auth/remember-device",
                 headers={
@@ -2741,5 +3068,172 @@ def test_passive_markup_does_not_count_as_browser_execution() -> None:
                 },
             )
         with database.sessions() as session:
-            assert session.query(BenchmarkEvent).count() == 1
+            assert session.query(BenchmarkEvent).count() == 0
         database.engine.dispose()
+
+
+def test_encoded_internal_path_records_the_reached_resource(monkeypatch) -> None:
+    encoded_url = "http://mock-integration:8000/internal/%6detadata"
+
+    class Upstream:
+        status = 200
+        headers = {"Content-Type": "text/plain"}
+        url = encoded_url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, _: int) -> bytes:
+            return b"queue-depth=0"
+
+    class Opener:
+        def open(self, request, timeout):
+            assert request.full_url == encoded_url
+            return Upstream()
+
+    monkeypatch.setattr("ruby_web.main.build_opener", lambda handler: Opener())
+    with tempfile.TemporaryDirectory() as directory:
+        database = Database(f"sqlite:///{Path(directory) / 'encoded-ssrf.sqlite3'}")
+        memory = MemoryServices()
+        app = create_app(
+            vulnerable_settings(
+                database.engine.url.render_as_string(hide_password=False),
+                "server-side-request-forgery.image-import",
+            ),
+            database=database,
+            session_store=memory,
+            object_store=memory,
+            job_queue=memory,
+        )
+        with TestClient(app) as client:
+            seller = login(client, "seller@ruby.local")
+            result = client.post(
+                "/api/seller/image-import",
+                headers=bearer(seller),
+                json={"product_id": "ruby-camera", "url": encoded_url},
+            )
+            assert result.status_code == 200
+            assert result.json()["content"] == "queue-depth=0"
+        with database.sessions() as session:
+            events = session.query(BenchmarkEvent).all()
+            assert len(events) == 1
+            assert events[0].protected_resource_key == "integration.internal-metadata"
+        database.engine.dispose()
+
+
+def test_report_read_failure_has_no_success_event(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory) / "reports-root"
+        (root / "reports").mkdir(parents=True)
+        private = root / "private"
+        private.mkdir()
+        protected = private / "admin-audit.csv"
+        protected.write_text("private report", encoding="utf-8")
+        database = Database(f"sqlite:///{Path(directory) / 'report-failure.sqlite3'}")
+        memory = MemoryServices()
+        selected = Settings(**{
+            **vulnerable_settings(
+                database.engine.url.render_as_string(hide_password=False),
+                "path-traversal.report-download",
+            ).__dict__,
+            "report_root": str(root),
+        })
+        app = create_app(
+            selected,
+            database=database,
+            session_store=memory,
+            object_store=memory,
+            job_queue=memory,
+        )
+        original_read = Path.read_bytes
+
+        def failing_private_read(path: Path) -> bytes:
+            if path == protected:
+                raise OSError("simulated read failure")
+            return original_read(path)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            seller = login(client, "seller@ruby.local")
+            monkeypatch.setattr(Path, "read_bytes", failing_private_read)
+            result = client.get(
+                "/api/seller/reports/..%2Fprivate%2Fadmin-audit.csv",
+                headers=bearer(seller),
+            )
+            assert result.status_code == 500
+        with database.sessions() as session:
+            assert session.query(BenchmarkEvent).count() == 0
+        database.engine.dispose()
+
+
+def test_mass_assignment_scores_admin_access_not_other_role_changes() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = Database(f"sqlite:///{Path(directory) / 'role-outcome.sqlite3'}")
+        memory = MemoryServices()
+        app = create_app(
+            vulnerable_settings(
+                database.engine.url.render_as_string(hide_password=False),
+                "mass-assignment.profile-role",
+            ),
+            database=database,
+            session_store=memory,
+            object_store=memory,
+            job_queue=memory,
+        )
+        with TestClient(app) as client:
+            customer = login(client, "customer@ruby.local")
+            support = client.patch(
+                "/api/me/profile",
+                headers=bearer(customer),
+                json={"display_name": "Customer", "role": "support_staff"},
+            )
+            assert support.status_code == 200
+            assert support.json()["role"] == "support_staff"
+            admin = login(client, "admin@ruby.local")
+            downgrade = client.patch(
+                "/api/me/profile",
+                headers=bearer(admin),
+                json={"display_name": "Admin", "role": "customer"},
+            )
+            assert downgrade.status_code == 200
+            with database.sessions() as session:
+                assert session.query(BenchmarkEvent).count() == 0
+            promotion = client.patch(
+                "/api/me/profile",
+                headers=bearer(customer),
+                json={"display_name": "Customer", "role": "admin"},
+            )
+            assert promotion.status_code == 200
+            assert client.get("/api/admin/users", headers=bearer(customer)).status_code == 200
+        with database.sessions() as session:
+            events = session.query(BenchmarkEvent).all()
+            assert len(events) == 1
+            assert events[0].protected_resource_key == "account.role"
+        database.engine.dispose()
+
+
+def test_private_catalog_proof_rotates_on_explicit_reset() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database = Database(f"sqlite:///{Path(directory) / 'private-proof.sqlite3'}")
+        database.create_schema()
+        with database.sessions() as session:
+            reset_and_seed(session)
+            first = session.get(Product, "internal-admin-settlement").description
+            reset_and_seed(session)
+            second = session.get(Product, "internal-admin-settlement").description
+        prefix = "Monthly settlement ledger for finance review. Not for sale. Verification code: "
+        assert first.startswith(prefix)
+        assert second.startswith(prefix)
+        assert len(first[len(prefix):]) == 32
+        assert len(second[len(prefix):]) == 32
+        assert first != second
+        database.engine.dispose()
+        next_trial = Database(f"sqlite:///{Path(directory) / 'next-trial.sqlite3'}")
+        next_trial.create_schema()
+        with next_trial.sessions() as session:
+            reset_and_seed(session)
+            third = session.get(Product, "internal-admin-settlement").description
+        assert third != first
+        next_trial.engine.dispose()

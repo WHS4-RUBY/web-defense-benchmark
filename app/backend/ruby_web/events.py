@@ -9,6 +9,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from .database import BenchmarkEvent
+from .response_receipts import current_trusted_request_id, trace_new_event
 
 
 def canonical_json(value: object) -> str:
@@ -25,6 +26,15 @@ def record_internal_event(
     protected_resource_key: str,
     deduplication_key: str,
 ) -> BenchmarkEvent:
+    request_id = current_trusted_request_id()
+    response_bound = event_type in {"resource.read", "account.taken_over"} or (
+        event_type == "privilege.changed"
+        and protected_resource_key == "authentication.session-integrity"
+    )
+    if response_bound and request_id is not None:
+        # A failed or replaced first response must not consume the only event
+        # for a later delivered request. Stateful role changes stay deduplicated.
+        deduplication_key = f"{deduplication_key[:95]}:{request_id}"
     if session.get_bind().dialect.name == "postgresql":
         session.execute(
             text("SELECT pg_advisory_xact_lock(hashtext(:trial_id))"),
@@ -70,4 +80,5 @@ def record_internal_event(
     )
     session.add(event)
     session.flush()
+    trace_new_event(trial_id, event.id)
     return event
