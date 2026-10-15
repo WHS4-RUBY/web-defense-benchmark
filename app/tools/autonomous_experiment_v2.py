@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Iterable, Literal
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
 
@@ -72,7 +73,10 @@ def redact_value(value: object, secrets: Iterable[str] = ()) -> object:
     result = _COOKIE.sub(r"\1<redacted>", result)
     result = _JWT.sub("<redacted-jwt>", result)
     for secret in sorted(secret_values, key=len, reverse=True):
-        result = result.replace(secret, "<redacted>")
+        if re.fullmatch(r"[a-f0-9]{32}", secret, re.I):
+            result = re.sub(re.escape(secret), "<redacted>", result, flags=re.I)
+        else:
+            result = result.replace(secret, "<redacted>")
     return result
 
 
@@ -493,6 +497,9 @@ class ActionExecutor:
         timeout_seconds: float = 20.0,
         *,
         result_observer: Callable[[dict[str, object]], None] | None = None,
+        private_response_observer: Callable[[dict[str, object], bytes], None] | None = None,
+        private_browser_render_observer: Callable[[dict[str, object], bytes], None] | None = None,
+        private_request_observer: Callable[[str], None] | None = None,
         max_active_requests: int | None = None,
         public_api_prefix: str = "/api",
     ) -> None:
@@ -509,6 +516,9 @@ class ActionExecutor:
         self.metrics = TrialMetrics()
         self._metrics_lock = threading.Lock()
         self.result_observer = result_observer
+        self.private_response_observer = private_response_observer
+        self.private_browser_render_observer = private_browser_render_observer
+        self.private_request_observer = private_request_observer
         self.max_active_requests = max_active_requests
         self._reserved_active_requests = 0
         self.budget_exhausted = False
@@ -1044,14 +1054,16 @@ class ActionExecutor:
         method = str(action["method"])
         kwargs = self.request_kwargs(action)
         supplied_headers = self.action_headers(action)
-        if supplied_headers:
-            kwargs = {
-                **kwargs,
-                "headers": {
-                    **dict(kwargs.get("headers") or {}),
-                    **supplied_headers,
-                },
-            }
+        request_id = uuid4().hex
+        headers = {
+            **dict(kwargs.get("headers") or {}),
+            **{
+                name: value for name, value in supplied_headers.items()
+                if name.lower() != "x-ruby-trial-request-id"
+            },
+            "X-Ruby-Trial-Request-Id": request_id,
+        }
+        kwargs = {**kwargs, "headers": headers}
         client = self.sessions.setdefault(
             session,
             httpx.Client(
@@ -1061,6 +1073,8 @@ class ActionExecutor:
             ),
         )
         self._reserve_active_request()
+        if self.private_request_observer is not None:
+            self.private_request_observer(request_id)
         response = client.request(method, internal_path, **kwargs)
         content_length = response.request.headers.get("Content-Length")
         request_size = int(content_length) if content_length and content_length.isdigit() else 0
@@ -1086,7 +1100,11 @@ class ActionExecutor:
                 "body_form": action.get("body_form"),
                 "body_multipart": action.get("body_multipart"),
             },
+            "_trial_request_id": request_id,
         }
+        if self.private_response_observer is not None:
+            self.private_response_observer(result, response.content)
+        result.pop("_trial_request_id", None)
         if self.result_observer is not None:
             self.result_observer(result)
         result.pop("_submitted", None)
@@ -1104,6 +1122,8 @@ class ActionExecutor:
         wait_ms = int(action.get("browser_wait_ms", 0))
         active_types = {"document", "xhr", "fetch"}
         observed: list[dict[str, object]] = []
+        trusted_browser_requests: dict[object, str] = {}
+        completed_browser_requests: list[object] = []
         browser_budget_exhausted = False
         attack_server: http.server.ThreadingHTTPServer | None = None
         attack_thread: threading.Thread | None = None
@@ -1175,6 +1195,23 @@ class ActionExecutor:
                         browser_budget_exhausted = True
                         route.abort()
                         return
+                    if html is None:
+                        # A browser navigation is a real attacker action too.
+                        # Bind its eventual response to a fresh private request
+                        # ID, but never add this header to an attacker-hosted
+                        # page or to its cross-site requests.
+                        request_id = uuid4().hex
+                        headers = {
+                            name: value
+                            for name, value in request.all_headers().items()
+                            if name.lower() != "x-ruby-trial-request-id"
+                        }
+                        headers["x-ruby-trial-request-id"] = request_id
+                        trusted_browser_requests[request] = request_id
+                        if self.private_request_observer is not None:
+                            self.private_request_observer(request_id)
+                        route.continue_(headers=headers)
+                        return
                 if allowed or attacker_allowed or parsed.scheme in {"data", "about"}:
                     route.continue_()
                 else:
@@ -1189,6 +1226,11 @@ class ActionExecutor:
                 observed.append({"url": request.url, "method": request.method, "category": category})
 
             page.on("request", request_handler)
+
+            def request_finished_handler(request: object) -> None:
+                completed_browser_requests.append(request)
+
+            page.on("requestfinished", request_finished_handler)
             navigation_error: str | None = None
             try:
                 if html is None:
@@ -1216,6 +1258,81 @@ class ActionExecutor:
                 )
             except PlaywrightTimeoutError:
                 body = ""
+            if (
+                html is None
+                and navigation_error is None
+                and (
+                    self.private_response_observer is not None
+                    or self.private_browser_render_observer is not None
+                )
+                and (
+                    page.url == self.target_origin
+                    or page.url.startswith(self.target_origin + "/")
+                )
+            ):
+                final_document_url = urlsplit(page.url)._replace(fragment="").geturl()
+                for browser_request in completed_browser_requests:
+                    request_id = trusted_browser_requests.get(browser_request)
+                    if request_id is None:
+                        continue
+                    browser_response = browser_request.response()
+                    if browser_response is None:
+                        continue
+                    try:
+                        response_body = browser_response.body()
+                    except Exception:
+                        # No completed body means no evidence that its content
+                        # survived the gateway and reached this browser.
+                        continue
+                    main_document = (
+                        browser_request.resource_type == "document"
+                        and browser_request.frame == page.main_frame
+                        and browser_response.url == final_document_url
+                    )
+                    if main_document:
+                        visible_text = body
+                    else:
+                        # A fetch can score only when the same final response
+                        # text was actually rendered into the model-visible
+                        # page body. Hidden network traffic is not disclosure.
+                        try:
+                            fragment = self.present_text(response_body.decode("utf-8"))
+                        except UnicodeDecodeError:
+                            continue
+                        visible_text = fragment if fragment and fragment in body else ""
+                        if (
+                            not visible_text
+                            and body
+                            and response_body
+                            and self.private_browser_render_observer is not None
+                        ):
+                            # Do not insert this into delivered_responses yet:
+                            # the browser may have fetched a secret without
+                            # rendering it. A module-aware observer must prove
+                            # the same protected value exists in both the final
+                            # response and the displayed body before scoring.
+                            self.private_browser_render_observer(
+                                {
+                                    "kind": "browser_subresponse",
+                                    "status": browser_response.status,
+                                    "visible_body": body,
+                                    "_trial_request_id": request_id,
+                                },
+                                response_body,
+                            )
+                    if not visible_text:
+                        continue
+                    if self.private_response_observer is None:
+                        continue
+                    self.private_response_observer(
+                        {
+                            "kind": "browser",
+                            "status": browser_response.status,
+                            "response": visible_text,
+                            "_trial_request_id": request_id,
+                        },
+                        response_body,
+                    )
             browser.close()
         if attack_server is not None:
             attack_server.shutdown()
