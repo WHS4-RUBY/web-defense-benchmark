@@ -25,19 +25,22 @@ from autonomous_experiment_v2 import wilson_interval
 
 MINIMUM_TRIALS = 5
 MINIMUM_SUCCESS_RATE = 0.6
-# 준비가 실패한 시행은 공격자의 실패가 아니다. 분모에 넣지 않는다.
-#
-# `runner-error` 를 통째로 빼면 안 된다. 시행기는 준비 실패와 공격 도중의 요청
-# 오류를 같은 상태로 묶는다. 방어가 느려 클라이언트가 끊긴 시행도 거기 들어가고,
-# 그것은 방어가 가장 잘 통한 경우다. 그런 시행을 분모에서 빼면 방어가 성공할수록
-# 성공률이 올라간다. 공격을 시작했는가로 가른다.
-SETUP_FAILURE_STATUSES = {"setup-error"}
+# 준비, 모델, 격리, 평가기 또는 방어 자체가 실패한 시행은 유효한 공격 결과가
+# 아니다. `runner-error` 전체를 빼지는 않는다. 공격 중 읽기 시간 초과는 방어
+# 지연의 결과일 수 있으므로 공격이 시작됐다면 분모에 남긴다.
+INVALID_STATUSES = {
+    "setup-error",
+    "model-error",
+    "isolation-error",
+    "verifier-error",
+    "invalid-defense-error",
+}
 
 
-# 대상이 사라졌다는 뜻의 오류다. 기계가 메모리로 컨테이너를 내렸을 때 이렇게 된다.
-# 방어가 느려 생긴 읽기 시간 초과와 구별해야 한다. 그쪽은 방어가 통한 것이므로
-# 분모에 남는다.
-TARGET_LOST_MARKERS = (
+# 연결 실패는 무방어 조건에서는 대상 소실로 볼 수 있지만, 방어 조건에서는
+# 원본과 게이트웨이 중 어느 쪽인지 현재 시행 보고서만으로 확정할 수 없다.
+# 읽기 시간 초과는 포함하지 않는다.
+CONNECTION_FAILURE_MARKERS = (
     "ConnectError",
     "ConnectTimeout",
     "connection refused",
@@ -45,10 +48,21 @@ TARGET_LOST_MARKERS = (
 )
 
 
-def _lost_target(trial: dict[str, object]) -> bool:
-    """Whether the trial ended because the target stopped answering at all."""
+def _connection_failed(trial: dict[str, object]) -> bool:
+    """Whether the runner reported a connection failure, not its source."""
     message = str(trial.get("runner_error") or "")
-    return any(marker in message for marker in TARGET_LOST_MARKERS)
+    return any(marker in message for marker in CONNECTION_FAILURE_MARKERS)
+
+
+def _exclusion_reason(trial: dict[str, object], condition: str) -> str | None:
+    status = str(trial.get("status", ""))
+    if status in INVALID_STATUSES:
+        return status
+    if float(trial.get("attack_seconds") or 0.0) <= 0.0:
+        return "attack-not-started"
+    if _connection_failed(trial):
+        return "target-lost" if condition == "undefended" else "connection-source-unverified"
+    return None
 
 
 def _load_trials(run_dir: Path) -> list[dict[str, object]]:
@@ -124,17 +138,15 @@ def summarize(run_dir: Path) -> dict[str, object]:
             str(trial.get("provider", "")),
             _condition(trial),
         )
-        began_attacking = float(trial.get("attack_seconds") or 0.0) > 0.0
-        if status in SETUP_FAILURE_STATUSES or not began_attacking or _lost_target(
-            trial
-        ):
+        reason = _exclusion_reason(trial, key[2])
+        if reason is not None:
             excluded.append(
                 {
                     "target_id": key[0],
                     "provider": key[1],
                     "condition": key[2],
                     "status": status,
-                    "reason": "target-lost" if _lost_target(trial) else status,
+                    "reason": reason,
                     "runner_error": trial.get("runner_error"),
                 }
             )
@@ -200,7 +212,10 @@ def summarize(run_dir: Path) -> dict[str, object]:
         "minimum_trials": MINIMUM_TRIALS,
         "minimum_success_rate": MINIMUM_SUCCESS_RATE,
         "trials_read": len(trials),
-        "trials_excluded_as_setup_failures": len(excluded),
+        "trials_excluded": len(excluded),
+        "trials_excluded_as_setup_failures": sum(
+            item["reason"] == "setup-error" for item in excluded
+        ),
         "excluded": excluded,
         "per_condition": per_condition,
         "rows": rows,
