@@ -25,7 +25,7 @@ def free_local_port() -> int:
         return int(listener.getsockname()[1])
 COMPOSE_PATH = APP_ROOT / "cve-geoserver" / "compose.yaml"
 EVENT_SCHEMA_PATH = APP_ROOT.parent / "contracts" / "verifier-ledger-event.schema.json"
-CONTROL_ORIGIN = "http://127.0.0.1:18081"
+CONTROL_ORIGIN = os.getenv("RUBY_TEST_CONTROL_ORIGIN", "http://127.0.0.1:18081")
 RESET_HEADERS = {"X-Ruby-Reset-Token": "development-reset-only"}
 
 
@@ -78,8 +78,12 @@ def cve_compose(
     environment["RUBY_GEOSERVER_TARGET_PORT"] = str(
         _PROJECT_PORTS.setdefault(project, free_local_port())
     )
+    override = os.getenv("RUBY_CVE_NETWORK_OVERRIDE")
+    compose_files = ["-f", str(COMPOSE_PATH)]
+    if override:
+        compose_files.extend(["-f", override])
     return run(
-        ["docker", "compose", "-p", project, "-f", str(COMPOSE_PATH), *arguments],
+        ["docker", "compose", "-p", project, *compose_files, *arguments],
         environment=environment,
         check=check,
         timeout=240,
