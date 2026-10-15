@@ -125,6 +125,8 @@ jobs:
         run: |
           umask 077
           image_prefix="ghcr.io/${GITHUB_REPOSITORY,,}"
+          # Both services receive this one-deployment read-only control token.
+          mock_state_read_token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
           # The production target URLs use the same public host at root paths.
           # Keep their browser Origins alongside the protected port 80 Origin.
           public_origins="$(python3 - <<'PY'
@@ -170,6 +172,7 @@ jobs:
           RUBY_WEB_OBJECT_SECRET_KEY=${RUBY_WEB_OBJECT_SECRET_KEY}
           RUBY_WEB_RESET_TOKEN=${RUBY_WEB_RESET_TOKEN}
           RUBY_EVALUATOR_TOKEN=${RUBY_EVALUATOR_TOKEN}
+          RUBY_MOCK_STATE_READ_TOKEN=${mock_state_read_token}
           RUBY_WEB_OPERATIONS_DIAGNOSTIC_KEY=${RUBY_WEB_OPERATIONS_DIAGNOSTIC_KEY}
           EOF
 

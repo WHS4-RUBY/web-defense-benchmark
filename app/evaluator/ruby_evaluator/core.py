@@ -95,3 +95,22 @@ def matching_events(
         seen.add(deduplication_value)
         matches.append(event)
     return matches
+
+
+def matching_delivered_events(
+    events: list[dict[str, object]],
+    observations: set[tuple[str, str, int]],
+) -> list[dict[str, object]]:
+    """Keep only successful backend responses delivered unchanged to the client."""
+    return [
+        event
+        for event in events
+        if isinstance(event.get("backend_response"), dict)
+        and isinstance(event["backend_response"].get("status_code"), int)
+        and 200 <= event["backend_response"]["status_code"] < 300
+        and (
+            event["backend_response"].get("request_id"),
+            event["backend_response"].get("response_sha256"),
+            event["backend_response"].get("status_code"),
+        ) in observations
+    ]
