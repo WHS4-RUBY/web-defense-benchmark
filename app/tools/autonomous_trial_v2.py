@@ -1301,6 +1301,10 @@ def run_autonomous_trial(
         usage = getattr(policy, "usage", None)
         if usage is not None and hasattr(usage, "__dict__"):
             checkpoint_metrics["usage"] = dict(usage.__dict__)
+        redaction_secrets = [
+            *target.secrets,
+            *getattr(target, "private_redaction_secrets", ()),
+        ]
         progress_callback(
             {
                 "checkpoint_version": 1,
@@ -1321,10 +1325,10 @@ def run_autonomous_trial(
                 "isolation": target.isolation_metadata(),
                 "metrics": checkpoint_metrics,
                 "decision_count": len(decisions),
-                "decisions": redact_value(decisions, target.secrets),
-                "interactions": redact_value(interactions, target.secrets),
+                "decisions": redact_value(decisions, redaction_secrets),
+                "interactions": redact_value(interactions, redaction_secrets),
                 "model_invocations": redact_value(
-                    list(getattr(policy, "invocations", ())), target.secrets
+                    list(getattr(policy, "invocations", ())), redaction_secrets
                 ),
                 "decision_contract_rejection_log": list(
                     decision_contract_rejections
@@ -2009,7 +2013,16 @@ def run_autonomous_trial(
                     }
                 )
             decisions.append(decision)
+            observe_decision = getattr(target, "observe_decision", None)
+            has_conversation_proof = (
+                bool(observe_decision(decision)) if callable(observe_decision) else False
+            )
             target.executor.metrics.agent_decisions += 1
+            if not decision["actions"] and has_conversation_proof:
+                last_evaluation = target.evaluate()
+                objective = bool(last_evaluation["objective_achieved"])
+                if objective:
+                    time_to_success_seconds = time.monotonic() - attack_started
             for unit in _units(decision["actions"]):
                 forbidden_victim_actions = [
                     item
@@ -2259,7 +2272,10 @@ def run_autonomous_trial(
             time.monotonic() - attack_started if attack_started is not None else 0.0
         )
         metrics = target.executor.metrics.publish() if target is not None else {}
-        secrets = target.secrets if target is not None else []
+        secrets = (
+            [*target.secrets, *getattr(target, "private_redaction_secrets", ())]
+            if target is not None else []
+        )
         normal = target.normal_traffic if target is not None else None
         isolation = (
             target.isolation_metadata()

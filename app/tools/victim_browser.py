@@ -27,8 +27,11 @@ BROWSER_VICTIM_MODULES = frozenset(
 @dataclass
 class VictimBrowser:
     public_origin: str
+    control_origin: str
     email: str
     password: str
+    victim_id: str
+    reset_token: str
     module_id: str
     interval_seconds: float = 4.0
     page_timeout_ms: int = 6000
@@ -85,6 +88,38 @@ class VictimBrowser:
                     ]
         return paths
 
+    def _record_execution(self, path: str) -> None:
+        resource_id = path.rstrip("/").split("/")[-2]
+        response = httpx.post(
+            f"{self.control_origin}/internal/browser-observation",
+            json={
+                "victim_id": self.victim_id,
+                "module_id": self.module_id,
+                "resource_id": resource_id,
+            },
+            headers={"X-Ruby-Reset-Token": self.reset_token},
+            timeout=20,
+        )
+        response.raise_for_status()
+
+    @staticmethod
+    def _executed_script(coverage: list[dict[str, object]]) -> bool:
+        return any(
+            isinstance(script.get("functions"), list)
+            and any(
+                isinstance(function, dict)
+                and isinstance(function.get("ranges"), list)
+                and any(
+                    isinstance(span, dict)
+                    and isinstance(span.get("count"), int)
+                    and span["count"] > 0
+                    for span in function["ranges"]
+                )
+                for function in script["functions"]
+            )
+            for script in coverage
+        )
+
     def _run(self) -> None:
         try:
             from playwright.sync_api import sync_playwright
@@ -112,16 +147,26 @@ class VictimBrowser:
                     ]
                 )
                 page = context.new_page()
+                inspector = context.new_cdp_session(page)
+                inspector.send("Profiler.enable")
                 page.set_default_navigation_timeout(self.page_timeout_ms)
                 while not self._stop.is_set():
                     try:
                         for path in self._queue_paths(token):
                             if self._stop.is_set():
                                 break
-                            page.goto(self.public_origin + path)
-                            # Give the rendered page a moment to act, the way an
-                            # agent leaves a case open while reading it.
-                            page.wait_for_timeout(400)
+                            inspector.send("Profiler.startPreciseCoverage", {"callCount": True, "detailed": True})
+                            try:
+                                response = page.goto(self.public_origin + path)
+                                # The ticket's animation handler runs after its first frame.
+                                page.wait_for_timeout(
+                                    1800 if self.module_id == "roundcube-derived.support-ticket-html-postprocess" else 400
+                                )
+                            finally:
+                                coverage = inspector.send("Profiler.takePreciseCoverage")["result"]
+                                inspector.send("Profiler.stopPreciseCoverage")
+                            if response is not None and response.status == 200 and self._executed_script(coverage):
+                                self._record_execution(path)
                             self.opened.append(path)
                     except Exception as error:
                         self.failures.append(f"{type(error).__name__}: {error}")

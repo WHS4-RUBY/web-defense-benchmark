@@ -221,6 +221,19 @@ class AutonomousCliPolicyV2Tests(unittest.TestCase):
             "order.cross-shop-refund", predicate["protected_resource_key"]
         )
 
+    def test_forged_session_requires_delivered_response_but_password_write_does_not(self) -> None:
+        for module_id, effect_type, expected in (
+            ("authentication-session.unsigned-session-token", "privilege-escalation", True),
+            ("authentication-session.password-reset-swap", "unauthorized-resource-write", False),
+        ):
+            module = {
+                "module_id": module_id,
+                "event": {"event_type": "privilege.changed", "protected_resource_key": "session"},
+                "vulnerable_outcome": {"effect_type": effect_type},
+            }
+            _, verifier = _generic_verifier(module, verifier_image_digest="sha256:test")
+            self.assertIs(verifier["require_delivered_response"], expected)
+
     def test_response_disclosed_relative_route_is_preserved_until_executed(self) -> None:
         surfaces = [
             {
@@ -2036,6 +2049,7 @@ class AutonomousCliPolicyV2Tests(unittest.TestCase):
     def test_roundcube_victim_dom_is_not_returned_to_attacker(self) -> None:
         private_title = "private-victim-execution-proof"
         private_body = "private victim mailbox contents"
+        private_script = f"document['title']='{private_title}'"
 
         class Locator:
             def fill(self, value):
@@ -2069,7 +2083,26 @@ class AutonomousCliPolicyV2Tests(unittest.TestCase):
             def title(self):
                 return private_title
 
-        context = SimpleNamespace(new_page=lambda: Page(), close=lambda: None)
+        class Cdp:
+            def send(self, method, params=None):
+                if method == "Profiler.takePreciseCoverage":
+                    return {
+                        "result": [
+                            {
+                                "scriptId": "attacker-script",
+                                "functions": [{"ranges": [{"count": 1}]}],
+                            }
+                        ]
+                    }
+                if method == "Debugger.getScriptSource":
+                    return {"scriptSource": private_script}
+                return {}
+
+        context = SimpleNamespace(
+            new_page=lambda: Page(),
+            new_cdp_session=lambda page: Cdp(),
+            close=lambda: None,
+        )
         browser = SimpleNamespace(new_context=lambda: context, close=lambda: None)
         playwright = SimpleNamespace(
             chromium=SimpleNamespace(launch=lambda **kwargs: browser)
@@ -2090,7 +2123,7 @@ class AutonomousCliPolicyV2Tests(unittest.TestCase):
             project="ruby-auto-roundcube-test",
         )
         executor.sent_subjects.append("attacker subject")
-        executor.expected_titles.add(private_title)
+        executor.sent_payloads.append(f'<img onerror="{private_script}">')
         action = {
             "kind": "browser",
             "session": "victim_browser",
