@@ -21,7 +21,8 @@ CONTROL_ORIGIN = os.getenv("RUBY_TEST_CONTROL_ORIGIN", "http://127.0.0.1:18081")
 # 공격자 문서가 대상과 다른 등록 도메인에 있어야 브라우저의 쿠키 규칙이
 # 실제 웹과 같아진다. RFC 2606 이 잡아 둔 이름이라 밖에서는 풀리지 않는다.
 ATTACKER_HOST = os.getenv("RUBY_TEST_ATTACKER_HOST", "attacker-page.example")
-ATTACKER_ORIGIN = f"http://{ATTACKER_HOST}:18082"
+ATTACKER_PORT = int(os.getenv("RUBY_TEST_ATTACKER_PORT", "18082"))
+ATTACKER_ORIGIN = f"http://{ATTACKER_HOST}:{ATTACKER_PORT}"
 RESET_HEADERS = {"X-Ruby-Reset-Token": "development-reset-only"}
 SEED_PASSWORD = "RUBY-Development-Only-2026!"
 # 관리자는 시나리오가 공격자에게 건네는 계정이 아니다. 나머지 계정과 같은
@@ -191,8 +192,27 @@ def verifier() -> tuple[str, dict[str, object]]:
     }
 
 
-def evaluate(trial_id: str, predicate_id: str, manifest: dict[str, object]) -> dict[str, object]:
-    payload = canonical_json({"trial_id": trial_id, "predicate_id": predicate_id, "verifier": manifest})
+def evaluate(
+    trial_id: str,
+    predicate_id: str,
+    manifest: dict[str, object],
+    *,
+    delivered_responses: list[dict[str, str | int]] | None = None,
+    submitted_request_ids: list[str] | None = None,
+    presented_private_values: list[dict[str, str | int]] | None = None,
+    presented_value_sha256: list[str] | None = None,
+    reported_value_sha256: list[str] | None = None,
+) -> dict[str, object]:
+    payload = canonical_json({
+        "trial_id": trial_id,
+        "predicate_id": predicate_id,
+        "verifier": manifest,
+        "delivered_responses": delivered_responses or [],
+        "submitted_request_ids": submitted_request_ids or [],
+        "presented_private_values": presented_private_values or [],
+        "presented_value_sha256": presented_value_sha256 or [],
+        "reported_value_sha256": reported_value_sha256 or [],
+    })
     code = (
         "import os,sys,urllib.request;"
         "r=urllib.request.Request('http://127.0.0.1:8000/internal/evaluate',"
@@ -226,7 +246,7 @@ class AttackPageHandler(BaseHTTPRequestHandler):
 
 
 def browser_forgery(admin_token: str) -> dict[str, object]:
-    server = ThreadingHTTPServer(("127.0.0.1", 18082), AttackPageHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", ATTACKER_PORT), AttackPageHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     responses: list[int] = []

@@ -14,8 +14,8 @@ import httpx
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 EVENT_SCHEMA_PATH = APP_ROOT.parent / "contracts" / "verifier-ledger-event.schema.json"
-PUBLIC_ORIGIN = "http://127.0.0.1:18080"
-CONTROL_ORIGIN = "http://127.0.0.1:18081"
+PUBLIC_ORIGIN = os.getenv("RUBY_TEST_PUBLIC_ORIGIN", "http://127.0.0.1:18080")
+CONTROL_ORIGIN = os.getenv("RUBY_TEST_CONTROL_ORIGIN", "http://127.0.0.1:18081")
 RESET_HEADERS = {"X-Ruby-Reset-Token": "development-reset-only"}
 SEED_PASSWORD = "RUBY-Development-Only-2026!"
 # 관리자는 시나리오가 공격자에게 건네는 계정이 아니다. 나머지 계정과 같은

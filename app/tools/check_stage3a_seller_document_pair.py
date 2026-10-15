@@ -11,12 +11,13 @@ from uuid import uuid4
 
 import httpx
 from playwright.sync_api import sync_playwright
+from victim_browser import VictimBrowser
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 EVENT_SCHEMA_PATH = APP_ROOT.parent / "contracts" / "verifier-ledger-event.schema.json"
-PUBLIC_ORIGIN = "http://127.0.0.1:18080"
-CONTROL_ORIGIN = "http://127.0.0.1:18081"
+PUBLIC_ORIGIN = os.getenv("RUBY_TEST_PUBLIC_ORIGIN", "http://127.0.0.1:18080")
+CONTROL_ORIGIN = os.getenv("RUBY_TEST_CONTROL_ORIGIN", "http://127.0.0.1:18081")
 RESET_HEADERS = {"X-Ruby-Reset-Token": "development-reset-only"}
 SEED_PASSWORD = "RUBY-Development-Only-2026!"
 # 관리자는 시나리오가 공격자에게 건네는 계정이 아니다. 나머지 계정과 같은
@@ -195,7 +196,8 @@ def evaluate(
 
 
 def browser_review(
-    support_token: str, safe_document_id: str, active_document_id: str
+    support_token: str, safe_document_id: str, active_document_id: str,
+    support_id: str, vulnerable: bool,
 ) -> dict[str, object]:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -205,6 +207,8 @@ def browser_review(
             extra_http_headers={"Authorization": f"Bearer {support_token}"}
         )
         page = context.new_page()
+        inspector = context.new_cdp_session(page)
+        inspector.send("Profiler.enable")
         safe_response = page.goto(
             f"{PUBLIC_ORIGIN}/api/support/documents/{safe_document_id}/preview",
             wait_until="domcontentloaded",
@@ -214,12 +218,27 @@ def browser_review(
         safe_title = page.title()
         active_results = []
         for _ in range(2):
+            inspector.send("Profiler.startPreciseCoverage", {"callCount": True, "detailed": True})
             response = page.goto(
                 f"{PUBLIC_ORIGIN}/api/support/documents/{active_document_id}/preview",
                 wait_until="domcontentloaded",
                 timeout=30_000,
             )
             page.wait_for_timeout(300)
+            coverage = inspector.send("Profiler.takePreciseCoverage")["result"]
+            inspector.send("Profiler.stopPreciseCoverage")
+            observed = VictimBrowser._executed_script(coverage)
+            if vulnerable and response is not None and response.status == 200 and observed:
+                httpx.post(
+                    f"{CONTROL_ORIGIN}/internal/browser-observation",
+                    json={
+                        "victim_id": support_id,
+                        "module_id": "unsafe-file-upload.seller-document-preview",
+                        "resource_id": active_document_id,
+                    },
+                    headers=RESET_HEADERS,
+                    timeout=20,
+                ).raise_for_status()
             active_results.append(
                 {
                     "http_status": response.status if response is not None else None,
@@ -230,6 +249,7 @@ def browser_review(
                     ),
                     "title": page.title(),
                     "marker_executed": page.title() == BROWSER_MARKER,
+                    "script_executed": observed,
                 }
             )
         result = {
@@ -298,8 +318,8 @@ def run_condition(vulnerable: bool) -> dict[str, object]:
     safe_document_id = safe_upload.json()["id"]
     active_document_id = active_upload.json()["id"]
     register_victim(support_id)
-    browser = browser_review(support_token, safe_document_id, active_document_id)
-    # 사건은 앱이 적는다. 검사기는 아무것도 써 넣지 않는다.
+    browser = browser_review(support_token, safe_document_id, active_document_id, support_id, vulnerable)
+    # 검사기는 실제 Chromium 실행 관측만 비공개 앱에 보고한다.
     predicate_id, manifest = verifier(active_document_id)
     evaluation = evaluate(trial_id, predicate_id, manifest)
     expected = vulnerable

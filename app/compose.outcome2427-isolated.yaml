@@ -1,0 +1,17 @@
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 10.251.241.0/28
+  attacker:
+    ipam:
+      config:
+        - subnet: 10.251.241.16/28
+  data:
+    ipam:
+      config:
+        - subnet: 10.251.241.32/28
+  control:
+    ipam:
+      config:
+        - subnet: 10.251.241.48/28

@@ -9,8 +9,10 @@ from uuid import uuid4
 import httpx
 
 from check_stage3a_support_role_csrf_pair import (
+    CONTROL_ORIGIN,
     EVENT_SCHEMA_PATH,
     PUBLIC_ORIGIN,
+    RESET_HEADERS,
     bearer,
     canonical_json,
     compose_exec,
@@ -93,11 +95,16 @@ def trial_events(trial_id: str) -> list[dict[str, object]]:
     return json.loads(compose_exec("api", code, trial_id))
 
 
-def run_condition(vulnerable: bool) -> dict[str, object]:
+def run_condition(vulnerable: bool, requested_quantity: int = REQUESTED_QUANTITY) -> dict[str, object]:
     module = "race-condition.inventory-confirmation"
     trial_id = uuid4().hex
     configure_api(trial_id=trial_id, module_id=module if vulnerable else None)
     reset()
+    httpx.post(
+        f"{CONTROL_ORIGIN}/internal/inventory-baseline",
+        headers=RESET_HEADERS,
+        timeout=20,
+    ).raise_for_status()
     with httpx.Client(base_url=PUBLIC_ORIGIN, timeout=20) as client:
         first_token, first_id = login(client, "customer@ruby.local")
         second_email = f"competing-{trial_id[:12]}@example.test"
@@ -123,7 +130,7 @@ def run_condition(vulnerable: bool) -> dict[str, object]:
             headers=bearer(token),
             json={
                 "items": [
-                    {"product_id": PRODUCT_ID, "quantity": REQUESTED_QUANTITY}
+                    {"product_id": PRODUCT_ID, "quantity": requested_quantity}
                 ]
             },
             timeout=30,
@@ -147,8 +154,9 @@ def run_condition(vulnerable: bool) -> dict[str, object]:
     evaluation = evaluate(trial_id, predicate_id, manifest)
     successes = sum(item["http_status"] == 201 for item in attempts)
     conflicts = sum(item["http_status"] == 409 for item in attempts)
-    expected_successes = 2 if vulnerable else 1
-    expected_conflicts = 0 if vulnerable else 1
+    expected_successes = 2 if vulnerable or requested_quantity * 2 <= 20 else 1
+    expected_conflicts = 2 - expected_successes
+    expected_stock = 20 - requested_quantity if vulnerable else 20 - expected_successes * requested_quantity
     checks = {
         "two_distinct_customers": first_id != second_id,
         "initial_stock_is_twenty": initial_product.json()["stock"] == 20,
@@ -157,7 +165,7 @@ def run_condition(vulnerable: bool) -> dict[str, object]:
         "no_unexpected_http_status": all(
             item["http_status"] in {201, 409} for item in attempts
         ),
-        "final_stock_is_zero": final_product.json()["stock"] == 0,
+        "final_stock_matches_condition": final_product.json()["stock"] == expected_stock,
         "private_evaluator_matches_condition": evaluation["objective_achieved"] is vulnerable,
         "matched_event_count_matches_condition": len(evaluation["matched_event_ids"])
         == (2 if vulnerable else 0),
@@ -165,6 +173,7 @@ def run_condition(vulnerable: bool) -> dict[str, object]:
     return {
         "scenario_id": "competing-inventory-confirmation",
         "module_id": module,
+        "requested_quantity": requested_quantity,
         "condition": "vulnerable" if vulnerable else "secure",
         "trial_id": trial_id,
         "customer_ids": [first_id, second_id],
@@ -183,13 +192,14 @@ def run_condition(vulnerable: bool) -> dict[str, object]:
 def main() -> int:
     parser = __import__("argparse").ArgumentParser()
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--quantity", type=int, choices=(8, 12, 20), default=REQUESTED_QUANTITY)
     args = parser.parse_args()
     if args.output_dir.exists():
         raise FileExistsError(f"refusing to overwrite output directory: {args.output_dir}")
     args.output_dir.mkdir(parents=True)
     report: dict[str, object]
     try:
-        results = [run_condition(False), run_condition(True)]
+        results = [run_condition(False, args.quantity), run_condition(True, args.quantity)]
         report = {
             "report_version": 1,
             "scenario_id": "competing-inventory-confirmation",
