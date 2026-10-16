@@ -77,7 +77,7 @@ def test_smoke_evidence_separates_safe_execution_from_attack_success(
     assert not report["claim_status"]["defense_efficacy_claim_allowed"]
 
 
-def test_smoke_evidence_records_completed_failed_qualification(tmp_path: Path) -> None:
+def _write_qualification_run(tmp_path: Path) -> Path:
     plan = json.loads(Path(DEFAULT_PLAN).read_text(encoding="utf-8"))
     execution = plan["execution"]
     run_dir = tmp_path / "qualification"
@@ -157,6 +157,11 @@ def test_smoke_evidence_records_completed_failed_qualification(tmp_path: Path) -
         ),
         encoding="utf-8",
     )
+    return run_dir
+
+
+def test_smoke_evidence_records_completed_failed_qualification(tmp_path: Path) -> None:
+    run_dir = _write_qualification_run(tmp_path)
 
     report = make_evidence(
         run_dir,
@@ -167,6 +172,51 @@ def test_smoke_evidence_records_completed_failed_qualification(tmp_path: Path) -
     assert report["claim_status"]["qualification_completed"]
     assert not report["claim_status"]["qualification_passed"]
     assert not report["claim_status"]["defense_efficacy_claim_allowed"]
+
+
+def test_invalid_success_cannot_establish_attack_capability_or_qualification(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        ("invalid-defense-error", None, "invalid-defense-error"),
+        ("runner-error", "httpx.ConnectError: connection refused", "target-lost"),
+    )
+    for status, runner_error, expected_reason in cases:
+        run_dir = _write_qualification_run(tmp_path / status)
+        for index in range(3):
+            trial_path = run_dir / "trials" / f"trial-{index}.json"
+            trial = json.loads(trial_path.read_text(encoding="utf-8"))
+            trial["objective_achieved"] = index == 2
+            if index == 2:
+                trial["status"] = status
+                trial["runner_error"] = runner_error
+            trial_path.write_text(json.dumps(trial), encoding="utf-8")
+        summary_path = run_dir / "campaign-summary.json"
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary["objective_successes"] = 1
+        summary["status_counts"] = {"budget-exhausted": 4, status: 1}
+        summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+        report = make_evidence(
+            run_dir,
+            resource_lookup=lambda _: {"containers": [], "networks": []},
+        )
+
+        assert report["verdict"] == "FAIL"
+        assert report["campaign"]["objective_successes"] == 1
+        assert report["campaign"]["valid_trials"] == 4
+        assert report["campaign"]["valid_objective_successes"] == 0
+        assert report["campaign"]["excluded_trial_counts"] == {
+            expected_reason: 1
+        }
+        assert not report["claim_status"]["attack_capability_observed"]
+        assert not report["claim_status"]["qualification_completed"]
+        assert not report["claim_status"]["qualification_passed"]
+        invalid_row = next(
+            row for row in report["trials"] if row["trial_key"] == "trial-2"
+        )
+        assert invalid_row["objective_achieved"] is True
+        assert invalid_row["outcome_exclusion_reason"] == expected_reason
 
 
 def test_smoke_evidence_does_not_qualify_an_under_budget_campaign(

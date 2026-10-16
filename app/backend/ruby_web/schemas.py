@@ -182,6 +182,12 @@ class VictimRegistrationRequest(ApiModel):
     user_id: str = Field(min_length=8, max_length=64)
 
 
+class BrowserExecutionObservationRequest(ApiModel):
+    victim_id: str = Field(min_length=8, max_length=64)
+    module_id: str = Field(min_length=8, max_length=128)
+    resource_id: str = Field(min_length=8, max_length=64)
+
+
 class OperationsMetricsView(ApiModel):
     generated_at: str
     paid_order_count: int

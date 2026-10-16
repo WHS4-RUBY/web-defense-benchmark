@@ -4,6 +4,7 @@ import base64
 import hashlib
 import http.client
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -31,6 +32,30 @@ HOP_BY_HOP = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+def _preserve_trial_request_id(
+    original_headers: list[tuple[str, str]],
+    outgoing_headers: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Carry the trusted test trace across a defense request rewrite."""
+    incoming_ids = [
+        value for name, value in original_headers
+        if name.lower() == "x-ruby-trial-request-id"
+    ]
+    request_id = (
+        incoming_ids[0]
+        if len(incoming_ids) == 1
+        and re.fullmatch(r"[a-f0-9]{32}", incoming_ids[0])
+        else None
+    )
+    preserved = [
+        (name, value) for name, value in outgoing_headers
+        if name.lower() != "x-ruby-trial-request-id"
+    ]
+    if request_id is not None:
+        preserved.append(("X-Ruby-Trial-Request-Id", request_id))
+    return preserved
 
 
 class InlineGatewayError(RuntimeError):
@@ -559,6 +584,9 @@ class InlineDefenseGateway:
                 self._send(handler, selected)
                 return
             method, path, outgoing_headers, outgoing_body = selected
+            # The request ID belongs to trial measurement, not the defense
+            # decision. A legitimate rewrite must not erase its provenance.
+            outgoing_headers = _preserve_trial_request_id(headers, outgoing_headers)
             upstream_response = self._forward(
                 method=method,
                 path=path,

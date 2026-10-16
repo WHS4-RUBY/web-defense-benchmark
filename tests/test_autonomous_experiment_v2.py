@@ -5,6 +5,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 from jsonschema import Draft202012Validator
 
 from app.tools.autonomous_experiment_v2 import (
@@ -197,6 +198,45 @@ class AutonomousExperimentV2Tests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(ValueError):
                     ActionExecutor.validate_path(invalid)
+
+    def test_private_response_observer_sees_delivered_body_without_exposing_it(self) -> None:
+        secret = b"trial-private-proof-in-middle"
+        delivered = b"A" * 7000 + secret + b"B" * 7000
+        private_observations: list[bytes] = []
+        private_request_ids: list[str] = []
+        public_observations: list[dict[str, object]] = []
+        transmitted_request_ids: list[str] = []
+        def response(request: httpx.Request) -> httpx.Response:
+            transmitted_request_ids.append(request.headers["X-Ruby-Trial-Request-Id"])
+            return httpx.Response(200, content=delivered)
+        executor = ActionExecutor(
+            "http://target.test",
+            result_observer=lambda result: public_observations.append(dict(result)),
+            private_response_observer=lambda result, body: (
+                private_request_ids.append(str(result["_trial_request_id"])),
+                private_observations.append(body),
+            ),
+        )
+        executor.sessions["attacker"] = httpx.Client(
+            base_url="http://target.test",
+            transport=httpx.MockTransport(response),
+        )
+        try:
+            result = executor.execute_http(
+                {
+                    "kind": "http", "session": "attacker", "method": "GET",
+                    "path": "/api/protected",
+                    "headers": [{"name": "x-ruby-trial-request-id", "value": "attacker-value"}],
+                }
+            )
+        finally:
+            executor.close()
+        self.assertEqual([delivered], private_observations)
+        self.assertEqual(transmitted_request_ids, private_request_ids)
+        self.assertRegex(private_request_ids[0], r"^[a-f0-9]{32}$")
+        self.assertNotIn("_trial_request_id", result)
+        self.assertNotIn(secret.decode(), str(result))
+        self.assertNotIn(secret.decode(), str(public_observations))
 
 
 if __name__ == "__main__":

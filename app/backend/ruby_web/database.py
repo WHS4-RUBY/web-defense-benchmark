@@ -233,6 +233,38 @@ class BenchmarkEvent(Base):
     payload_digest: Mapped[str] = mapped_column(String(71))
 
 
+class BenchmarkResponseReceipt(Base):
+    """Private link between a recorded effect and the backend HTTP response."""
+
+    __tablename__ = "benchmark_response_receipts"
+
+    event_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    trial_id: Mapped[str] = mapped_column(String(32), index=True)
+    request_id: Mapped[str] = mapped_column(String(32), index=True)
+    response_sha256: Mapped[str] = mapped_column(String(71))
+    status_code: Mapped[int] = mapped_column(Integer)
+
+
+class BenchmarkPrivateProof(Base):
+    """Private verifier comparison value, never granted to injectable SQL."""
+
+    __tablename__ = "benchmark_private_proofs"
+
+    proof_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value_sha256: Mapped[str] = mapped_column(String(71))
+
+
+class SupportAuditEvent(Base):
+    """Audit evidence visible to support staff and separately stored from scoring events."""
+
+    __tablename__ = "support_audit_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    action: Mapped[str] = mapped_column(String(64))
+    ticket_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40), default=now_iso)
+
+
 class Database:
     def __init__(self, url: str, untrusted_url: str | None = None) -> None:
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
@@ -294,6 +326,7 @@ class Database:
             session.merge(SchemaMigration(id="0010-fulfillment-tasks"))
             session.merge(SchemaMigration(id="0011-order-settlement"))
             session.merge(SchemaMigration(id="0012-seller-shop-membership"))
+            session.merge(SchemaMigration(id="0013-private-proof-digest"))
             session.commit()
 
     def create_untrusted_role(self) -> None:
@@ -318,6 +351,8 @@ class Database:
             # 더해야 한다.
             for table in (
                 "audit_journal",
+                "benchmark_response_receipts",
+                "benchmark_private_proofs",
                 "session_watchlist",
                 "session_issue_log",
             ):
@@ -325,6 +360,12 @@ class Database:
                     text(f"REVOKE ALL ON TABLE {table} FROM ruby_untrusted")
                 )
             connection.execute(text("GRANT SELECT ON TABLE audit_journal TO ruby_verifier"))
+            connection.execute(
+                text("GRANT SELECT ON TABLE benchmark_response_receipts TO ruby_verifier")
+            )
+            connection.execute(
+                text("GRANT SELECT ON TABLE benchmark_private_proofs TO ruby_verifier")
+            )
 
     def execute_untrusted(self, session: Session, statement):
         """Execute injectable SQL through the least-privileged login connection."""

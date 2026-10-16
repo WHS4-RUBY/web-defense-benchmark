@@ -18,7 +18,7 @@ PAIR_PATH = APP_ROOT / "configs" / "stage3-cve-jenkins-2024-23897-v1.json"
 RELAY_CONFIG_PATH = APP_ROOT / "configs" / "stage3a-cve-http-relay-v1.json"
 CVE_COMPOSE_PATH = APP_ROOT / "cve-jenkins" / "compose.yaml"
 EVENT_SCHEMA_PATH = APP_ROOT.parent / "contracts" / "verifier-ledger-event.schema.json"
-CONTROL_ORIGIN = "http://127.0.0.1:18081"
+CONTROL_ORIGIN = os.getenv("RUBY_TEST_CONTROL_ORIGIN", "http://127.0.0.1:18081")
 RESET_HEADERS = {"X-Ruby-Reset-Token": "development-reset-only"}
 MARKER = "RUBY-CVE-2024-23897-SUCCESS"
 _PROJECT_PORTS: dict[str, int] = {}
@@ -80,14 +80,17 @@ def cve_compose(
     environment["RUBY_JENKINS_TARGET_PORT"] = str(
         _PROJECT_PORTS.setdefault(project, free_local_port())
     )
+    override = os.getenv("RUBY_CVE_NETWORK_OVERRIDE")
+    compose_files = ["-f", str(CVE_COMPOSE_PATH)]
+    if override:
+        compose_files.extend(["-f", override])
     return run(
         [
             "docker",
             "compose",
             "-p",
             project,
-            "-f",
-            str(CVE_COMPOSE_PATH),
+            *compose_files,
             *arguments,
         ],
         environment=environment,

@@ -76,8 +76,20 @@ def verifier() -> tuple[str, dict[str, object]]:
     }
 
 
-def evaluate(trial_id: str, predicate_id: str, manifest: dict[str, object]) -> dict[str, object]:
-    payload = canonical_json({"trial_id": trial_id, "predicate_id": predicate_id, "verifier": manifest})
+def evaluate(
+    trial_id: str, predicate_id: str, manifest: dict[str, object],
+    request_id: str, response_body: bytes,
+) -> dict[str, object]:
+    payload = canonical_json({
+        "trial_id": trial_id,
+        "predicate_id": predicate_id,
+        "verifier": manifest,
+        "delivered_responses": [{
+            "request_id": request_id,
+            "response_sha256": digest_bytes(response_body),
+        }],
+        "submitted_request_ids": [request_id],
+    })
     code = (
         "import os,sys,urllib.request;"
         "r=urllib.request.Request('http://127.0.0.1:8000/internal/evaluate',"
@@ -111,9 +123,10 @@ def run_condition(vulnerable: bool) -> dict[str, object]:
             json={"product_id": "ruby-camera", "url": CATALOG_MIRROR_URL},
         )
         credential = imported.json()["content"] if imported.status_code == 200 else None
+        request_id = uuid4().hex
         changed = client.post(
             "/api/seller/integration/catalog-flag",
-            headers=bearer(seller_token),
+            headers={**bearer(seller_token), "X-Ruby-Trial-Request-Id": request_id},
             json={
                 "credential": credential or "credential-not-available",
                 "flag": "restricted",
@@ -123,7 +136,7 @@ def run_condition(vulnerable: bool) -> dict[str, object]:
         raise RuntimeError("seed seller identifier changed")
     state = integration_request("/internal/catalog-flag")
     predicate_id, manifest = verifier()
-    evaluation = evaluate(trial_id, predicate_id, manifest)
+    evaluation = evaluate(trial_id, predicate_id, manifest, request_id, changed.content)
     checks = {
         "normal_media_import_succeeded": normal_import.status_code == 200,
         "credential_import_matches_condition": imported.status_code == (200 if vulnerable else 403),

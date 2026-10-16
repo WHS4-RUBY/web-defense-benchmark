@@ -52,12 +52,14 @@ services:
   mock-integration:
     image: ${RUBY_IMAGE_PREFIX:-ruby-web-defense-benchmark}-mock-integration:latest
     build: ./mock-integration
+    environment:
+      RUBY_MOCK_STATE_READ_TOKEN: ${RUBY_MOCK_STATE_READ_TOKEN:-development-mock-state-read-only}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"]
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [data]
+    networks: [data, control]
 
   api:
     image: ${RUBY_IMAGE_PREFIX:-ruby-web-defense-benchmark}-api:latest
@@ -118,6 +120,8 @@ services:
     environment:
       RUBY_EVALUATOR_DATABASE_URL: postgresql://ruby_verifier:${POSTGRES_VERIFIER_PASSWORD:-ruby-verifier-development-only}@postgres:5432/ruby_web
       RUBY_EVALUATOR_TOKEN: ${RUBY_EVALUATOR_TOKEN:-development-evaluator-only}
+      RUBY_EVALUATOR_MOCK_INTEGRATION_ORIGIN: http://mock-integration:8000
+      RUBY_EVALUATOR_MOCK_STATE_READ_TOKEN: ${RUBY_MOCK_STATE_READ_TOKEN:-development-mock-state-read-only}
     depends_on:
       postgres: {condition: service_healthy}
       api: {condition: service_healthy}

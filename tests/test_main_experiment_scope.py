@@ -115,3 +115,15 @@ def test_runner_seals_the_policy_and_uses_the_main_scope_by_default() -> None:
     assert "main-experiment-target-policy-v1.json" in sealed_names
     assert "main-experiment-target-policy.schema.json" in sealed_names
     assert "main_experiment_scope_v1.py" in sealed_names
+
+
+def test_jenkins_cli_cannot_be_misreported_as_defended() -> None:
+    jenkins = "cve-original:CVE-2024-23897"
+    campaign.assert_defense_front_covers_targets([jenkins], ["undefended"])
+    campaign.assert_defense_front_covers_targets(
+        ["cve-original:CVE-2024-36401"], ["undefended", "static"]
+    )
+    with pytest.raises(ValueError, match="Jenkins CLI bypasses the defense front"):
+        campaign.assert_defense_front_covers_targets(
+            [jenkins], ["undefended", "static"]
+        )

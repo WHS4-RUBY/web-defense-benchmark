@@ -11,12 +11,13 @@ from uuid import uuid4
 
 import httpx
 from playwright.sync_api import sync_playwright
+from victim_browser import VictimBrowser
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 EVENT_SCHEMA_PATH = APP_ROOT.parent / "contracts" / "verifier-ledger-event.schema.json"
-PUBLIC_ORIGIN = "http://127.0.0.1:18080"
-CONTROL_ORIGIN = "http://127.0.0.1:18081"
+PUBLIC_ORIGIN = os.getenv("RUBY_TEST_PUBLIC_ORIGIN", "http://127.0.0.1:18080")
+CONTROL_ORIGIN = os.getenv("RUBY_TEST_CONTROL_ORIGIN", "http://127.0.0.1:18081")
 RESET_HEADERS = {"X-Ruby-Reset-Token": "development-reset-only"}
 SEED_PASSWORD = "RUBY-Development-Only-2026!"
 # 관리자는 시나리오가 공격자에게 건네는 계정이 아니다. 나머지 계정과 같은
@@ -263,7 +264,7 @@ def run_template_condition(vulnerable: bool) -> dict[str, object]:
     }
 
 
-def browser_open(token: str, path: str) -> dict[str, object]:
+def browser_open(token: str, path: str, victim_id: str, vulnerable: bool) -> dict[str, object]:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             executable_path=str(CHROME_PATH), headless=True, args=["--disable-gpu"]
@@ -272,15 +273,33 @@ def browser_open(token: str, path: str) -> dict[str, object]:
             extra_http_headers={"Authorization": f"Bearer {token}"}
         )
         page = context.new_page()
+        inspector = context.new_cdp_session(page)
+        inspector.send("Profiler.enable")
+        inspector.send("Profiler.startPreciseCoverage", {"callCount": True, "detailed": True})
         response = page.goto(
             PUBLIC_ORIGIN + path, wait_until="domcontentloaded", timeout=30_000
         )
         page.wait_for_timeout(1_000)
+        coverage = inspector.send("Profiler.takePreciseCoverage")["result"]
+        inspector.send("Profiler.stopPreciseCoverage")
+        observed = VictimBrowser._executed_script(coverage)
+        if vulnerable and response is not None and response.status == 200 and observed:
+            httpx.post(
+                f"{CONTROL_ORIGIN}/internal/browser-observation",
+                json={
+                    "victim_id": victim_id,
+                    "module_id": "roundcube-derived.support-ticket-html-postprocess",
+                    "resource_id": path.rstrip("/").split("/")[-2],
+                },
+                headers=RESET_HEADERS,
+                timeout=20,
+            ).raise_for_status()
         result = {
             "http_status": response.status if response is not None else None,
             "title": page.title(),
             "ticket_text_visible": page.get_by_text("Ticket details", exact=True).count() == 1,
             "marker_executed": page.title() == XSS_MARKER,
+            "script_executed": observed,
         }
         context.close()
         browser.close()
@@ -312,12 +331,12 @@ def run_html_condition(vulnerable: bool) -> dict[str, object]:
         support_token, actor_id = login(client, "support@ruby.local")
     register_victim(actor_id)
     first = browser_open(
-        support_token, f"/api/support/tickets/{ticket_id}/html-preview"
+        support_token, f"/api/support/tickets/{ticket_id}/html-preview", actor_id, vulnerable
     )
     second = browser_open(
-        support_token, f"/api/support/tickets/{ticket_id}/html-preview"
+        support_token, f"/api/support/tickets/{ticket_id}/html-preview", actor_id, vulnerable
     )
-    # 사건은 앱이 적는다. 검사기는 아무것도 써 넣지 않는다.
+    # 검사기는 실제 Chromium 실행 관측만 비공개 앱에 보고한다.
     subject = {"actor_id": actor_id, "authorized": "false", "role": "support_staff"}
     object_ = {"resource_id": "ticket.browser-marker", "ticket_id": ticket_id}
     predicate_id, manifest = verifier(

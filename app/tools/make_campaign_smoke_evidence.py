@@ -4,10 +4,12 @@ import argparse
 import hashlib
 import json
 import subprocess
+from collections import Counter
 from pathlib import Path
 from typing import Callable
 
 from analyze_confirmatory_campaign import DEFAULT_PLAN, validate_plan
+from summarize_condition_campaign import _condition, _exclusion_reason
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +25,8 @@ INFRASTRUCTURE_FAILURES = {
     "verifier-error",
     "invalid-defense-error",
 }
+
+
 def load_json(path: Path) -> dict[str, object]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -103,6 +107,19 @@ def make_evidence(
         if not path.name.endswith((".checkpoint.json", ".running.json"))
     )
     trials = [load_json(path) for path in trial_paths]
+    trial_conditions = [_condition(trial) for trial in trials]
+    trial_outcomes = [
+        (condition, _exclusion_reason(trial, condition))
+        for trial, condition in zip(trials, trial_conditions, strict=True)
+    ]
+    eligible_trials = [
+        trial
+        for trial, (_, reason) in zip(trials, trial_outcomes, strict=True)
+        if reason is None
+    ]
+    excluded_trial_counts = Counter(
+        reason for _, reason in trial_outcomes if reason is not None
+    )
     schedule_keys = [
         str(item.get("trial_key", "")) if isinstance(item, dict) else ""
         for item in schedule
@@ -119,7 +136,9 @@ def make_evidence(
             project_resources[project] = resource_lookup(project)
 
     trial_rows = []
-    for path, trial in zip(trial_paths, trials, strict=True):
+    for path, trial, (condition, exclusion_reason) in zip(
+        trial_paths, trials, trial_outcomes, strict=True
+    ):
         normal_probe = trial.get("normal_traffic_through_gateway")
         metrics = trial.get("metrics")
         normal_metrics = (
@@ -143,6 +162,8 @@ def make_evidence(
                 "target_id": trial.get("target_id"),
                 "provider": trial.get("provider"),
                 "condition": trial.get("condition"),
+                "outcome_condition": condition,
+                "outcome_exclusion_reason": exclusion_reason,
                 "status": trial.get("status"),
                 "objective_achieved": trial.get("objective_achieved"),
                 "observed_model_id": trial.get("observed_model_id"),
@@ -325,17 +346,24 @@ def make_evidence(
         ),
     }
     qualification_groups: dict[tuple[str, str], list[dict[str, object]]] = {}
-    for trial in trials:
-        if trial.get("condition") != "undefended":
+    for trial, (condition, exclusion_reason) in zip(
+        trials, trial_outcomes, strict=True
+    ):
+        if condition != "undefended":
             continue
         key = (str(trial.get("target_id", "")), str(trial.get("provider", "")))
-        qualification_groups.setdefault(key, []).append(trial)
+        group = qualification_groups.setdefault(key, [])
+        if exclusion_reason is None:
+            group.append(trial)
     qualification_evaluated = (
         checks["campaign_completed"]
         and bool(trials)
         and len(qualification_groups) > 0
-        and all(trial.get("condition") == "undefended" for trial in trials)
-        and all(len(group) >= int(qualification["minimum_trials"]) for group in qualification_groups.values())
+        and all(condition == "undefended" for condition, _ in trial_outcomes)
+        and all(
+            len(group) >= int(qualification["minimum_trials"])
+            for group in qualification_groups.values()
+        )
         and all(execution_plan_checks.values())
     )
     qualification_passed = qualification_evaluated and all(
@@ -359,13 +387,18 @@ def make_evidence(
             "completed_trials": summary.get("completed_trials"),
             "status_counts": summary.get("status_counts"),
             "objective_successes": summary.get("objective_successes"),
+            "valid_trials": len(eligible_trials),
+            "valid_objective_successes": sum(
+                trial.get("objective_achieved") is True for trial in eligible_trials
+            ),
+            "excluded_trial_counts": dict(sorted(excluded_trial_counts.items())),
         },
         "trials": trial_rows,
         "project_resources_after_run": project_resources,
         "claim_status": {
             "execution_and_isolation_smoke_passed": all(checks.values()),
             "attack_capability_observed": any(
-                item.get("objective_achieved") is True for item in trial_rows
+                trial.get("objective_achieved") is True for trial in eligible_trials
             ),
             "qualification_completed": qualification_evaluated,
             "qualification_passed": qualification_passed,

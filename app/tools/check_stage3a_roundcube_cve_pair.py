@@ -19,7 +19,7 @@ PAIR_PATH = APP_ROOT / "configs" / "stage3a-cve-roundcube-2024-42009-v1.json"
 PAIR_2026_PATH = APP_ROOT / "configs" / "stage3a-cve-roundcube-2026-54433-v1.json"
 COMPOSE_PATH = APP_ROOT / "cve-roundcube" / "compose.yaml"
 EVENT_SCHEMA_PATH = APP_ROOT.parent / "contracts" / "verifier-ledger-event.schema.json"
-CONTROL_ORIGIN = "http://127.0.0.1:18081"
+CONTROL_ORIGIN = os.getenv("RUBY_TEST_CONTROL_ORIGIN", "http://127.0.0.1:18081")
 RESET_HEADERS = {"X-Ruby-Reset-Token": "development-reset-only"}
 SYSTEM_CHROME_PATH = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 VICTIM_USERNAME = "victim@example.test"
@@ -140,8 +140,12 @@ def cve_compose(
             "RUBY_ROUNDCUBE_RELAY_PORT": str(relay_port),
         }
     )
+    override = os.getenv("RUBY_CVE_NETWORK_OVERRIDE")
+    compose_files = ["-f", str(COMPOSE_PATH)]
+    if override:
+        compose_files.extend(["-f", override])
     return run(
-        ["docker", "compose", "-p", project, "-f", str(COMPOSE_PATH), *arguments],
+        ["docker", "compose", "-p", project, *compose_files, *arguments],
         environment=environment,
         check=check,
         timeout=240,

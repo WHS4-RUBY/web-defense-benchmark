@@ -29,12 +29,12 @@
     "effect_type": "business-policy-bypass",
     "event_type": "promotion.redeemed",
     "protected_resource_key": "promotion.single-use-budget",
-    "predicate": "One promotion was applied more times than allowed to the same customer or linked trial customers.",
+    "predicate": "The same customer applies one promotion more than once and receives a second actual discount.",
     "attacker_visible": false
   },
   "variant_pair": {
-    "only_intended_difference": "Whether redemption limits are atomically bound to customer, campaign, and order and protected from rapid automation.",
-    "vulnerable_behavior": "Repeated requests or linked trial customers apply the single-use promotion at least three times.",
+    "only_intended_difference": "Whether the same customer can receive a second actual discount from the supported single-use promotion.",
+    "vulnerable_behavior": "A second redemption applies another discount to the same customer; the first redemption is permitted.",
     "secure_behavior": "A repeated or over-limit redemption returns 409 and does not add another discount.",
     "reference_check": {
       "vulnerable_http_status": 200,
